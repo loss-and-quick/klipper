@@ -204,7 +204,13 @@ class LoadCellSensor:
         self.logger = logging.getLogger('klippy')
         self.sample_interval = config.getfloat('sample_interval', 0.2, 0.1)
         self.check_only_when_printing = config.getboolean('check_only_when_printing', True)
-        self.vc = self.printer.lookup_object("virtual_sdcard")
+        try:
+            self.pause_resume = self.printer.load_object(
+                config, "pause_resume")
+        except config.error:
+            raise self.printer.config_error(
+                f"{self.name} requires [pause_resume] to work,"
+                " please add it to your config!")
         self.max_force = config.getint('max_force', 900, 0)
         self.overload_action = config.getchoice("overload_action", ["shutdown", "pause"], default="shutdown")
         self.sample_timer = self.reactor.register_timer(self._sample)
@@ -223,14 +229,18 @@ class LoadCellSensor:
             self.logger.warning(f"{self.name}: Could not send H7 poll: {e}")
         weight = self.loadcell.last_weight_grams
         if weight > self.max_force:
-            if not self.check_only_when_printing or self.vc.is_active():
+            idle_timeout = self.printer.lookup_object("idle_timeout")
+            is_printing = idle_timeout.get_status(eventtime)["state"] == "Printing"
+            if not self.check_only_when_printing or is_printing:
                 msg = f"{self.name}: Max force exceeded. Last weight was: {weight}g"
                 if self.overload_action == "shutdown":
                     self.printer.invoke_shutdown(msg)
                     return self.reactor.NEVER
                 else:
-                    self.logger.warning(msg)
-                    self.vc.do_pause()
+                    if not self.pause_resume.is_paused:
+                        self.logger.warning(msg)
+                        self.pause_resume.send_pause_command()
+                        self.gcode.run_script_from_command("PAUSE\nM400\n")
         measured_time = self.reactor.monotonic()
         if self._callback:
             try:
@@ -238,6 +248,7 @@ class LoadCellSensor:
             except Exception:
                 estimated = None
             self._callback(estimated, weight)
+
         return measured_time + self.sample_interval
 
     def setup_callback(self, cb):

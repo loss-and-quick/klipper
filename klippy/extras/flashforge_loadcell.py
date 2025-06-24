@@ -19,19 +19,31 @@ class Commands(Enum):
     H7 = 'H7'
     TEST = 'TEST'
 
-    @classmethod
-    def from_mcu_command(cls, cmd):
-        if cmd==MCU_CMD_FLASHFORGE_H1:
-            return cls.H1
-        if cmd==MCU_CMD_FLASHFORGE_H2:
-            return cls.H2
-        if cmd==MCU_CMD_FLASHFORGE_H3:
-            return cls.H3
-        if cmd==MCU_CMD_FLASHFORGE_H7:
-            return cls.H7
-        if cmd==MCU_CMD_FLASHFORGE_TEST:
-            return cls.TEST
-        raise ValueError(f"Unknown MCU command for loadcell: {cmd}")
+_MCU_CMD_MAP = {
+    MCU_CMD_FLASHFORGE_H1: Commands.H1,
+    MCU_CMD_FLASHFORGE_H2: Commands.H2,
+    MCU_CMD_FLASHFORGE_H3: Commands.H3,
+    MCU_CMD_FLASHFORGE_H7: Commands.H7,
+    MCU_CMD_FLASHFORGE_TEST: Commands.TEST,
+}
+
+class MCUResponse:
+    def __init__(self, params):
+        self.params = params
+        self.command_name = self._decode(params.get('command'))
+        self.status = self._decode(params.get('status'), 'unknown')
+        self.raw_response = self._decode(params.get('raw_response'))
+        try:
+            self.value = int(params.get('value', 0))
+        except (ValueError, TypeError):
+            self.value = 0
+
+    def _decode(self, value, default=''):
+        if value is None: return default
+        if isinstance(value, str): return value
+        try: return value.decode('utf-8')
+        except: return default
+
 
 class FlashforgeLoadCell:
     def __init__(self, config):
@@ -44,7 +56,7 @@ class FlashforgeLoadCell:
         self.active_command = None
         self.logger = logging.getLogger('klippy')
         self.last_weight_grams = 0
-        self.tare_threshold = config.getint('tare_threshold', 5, 0)
+        self.tare_threshold = config.getint('tare_threshold', 50, 0)
         self.tare_timeout = config.getfloat('tare_timeout', 10.0, 0.)
         self.supported_cmds = {}
         self.gcode.register_command(
@@ -65,12 +77,12 @@ class FlashforgeLoadCell:
         self.gcode.register_command(
             "FLASHFORGE_GET_LOAD_CELL_WEIGHT",
             self.cmd_GET_LOAD_CELL_WEIGHT,
-            desc="Queries and displays the current weight (H7)"
+            desc="Queries and displays the current weight"
         )
         self.gcode.register_command(
             "FLASHFORGE_LOAD_CELL_TEST",
             self.cmd_LOAD_CELL_TEST,
-            desc="Sends an arbitrary command to the loadcell."
+            desc="Sends an arbitrary command to the loadcell"
         )
         self.printer.register_event_handler("klippy:connect", self._handle_connect)
 
@@ -90,104 +102,60 @@ class FlashforgeLoadCell:
             self.supported_cmds[cmd_name] = cmd
 
     def _handle_flashforge_response(self, params):
-        raw_cmd = params.get('command')
-        if raw_cmd is None:
-            self.logger.warning(f"{self.name}: Response without command field: {params}")
-            return
-        try:
-            cmd_str = raw_cmd.decode('utf-8')
-        except Exception:
-            self.logger.warning(f"{self.name}: Cannot decode command in response: {raw_cmd}")
-            return
-
-        try:
-            response_cmd = Commands(cmd_str)
-        except ValueError:
-            self.logger.info(f"{self.name}: Unrecognized response command '{cmd_str}'")
-            return
-
-        status_raw = params.get('status')
-        status = None
-        if status_raw is not None:
-            try:
-                status = status_raw.decode('utf-8')
-            except Exception:
-                status = None
-
-        # self.logger.info(f"{self.name}: Received response: {response_cmd} {params}")
+        response = MCUResponse(params)
+        self.logger.debug(f"{self.name}: Received response: {response.command_name}, status: {response.status}")
 
         if self.active_command:
-            expected = self.active_command.get('cmd')
-            if response_cmd == expected:
+            expected_cmd = self.active_command.get('cmd')
+            if response.command_name == expected_cmd.value:
                 completion = self.active_command.get('completion')
                 if not completion.test():
-                    completion.complete(params)
-                self.active_command = None
+                    completion.complete(response)
                 return
 
-        if response_cmd == Commands.H7 and status == 'ok':
-            value_raw = params.get('value')
-            try:
-                self.last_weight_grams = int(value_raw or 0)
-            except Exception:
-                self.logger.warning(f"{self.name}: Invalid weight value: {value_raw}")
+        if response.command_name == Commands.H7.value and response.status == 'ok':
+            self.last_weight_grams = response.value
 
     def _send_and_wait(self, command_name, params_list=None):
-        if self.active_command:
+       if self.active_command:
             raise self.printer.command_error(f"{self.name}: Another G-Code command is already in progress.")
-        cmd_obj = self.mcu.try_lookup_command(command_name)
-        if not cmd_obj:
-            raise self.printer.command_error(f"{self.name}: MCU command '{command_name}' not found. Check firmware.")
-        try:
-            cmd_enum = Commands.from_mcu_command(command_name)
-        except ValueError as e:
-            raise self.printer.command_error(f"{self.name}: {e}")
+
+        cmd_obj = self.supported_cmds.get(command_name)
+        cmd_enum = _MCU_CMD_MAP.get(command_name)
+        if not cmd_obj or not cmd_enum:
+            raise self.printer.command_error(f"{self.name}: MCU command '{command_name}' not found.")
+            
         completion = self.reactor.completion()
         self.active_command = {'cmd': cmd_enum, 'completion': completion}
-        if params_list:
-            cmd_obj.send(params_list)
-        else:
-            cmd_obj.send()
+
         try:
+            if params_list:
+                cmd_obj.send(params_list)
+            else:
+                cmd_obj.send()
+
             response = completion.wait(self.reactor.monotonic() + 0.6)
-        except self.reactor.TimeoutError:
-            self.active_command = None
-            raise self.printer.command_error(f"{self.name}: MCU command '{command_name}' timed out.")
+
+            if response is None:
+                raise self.printer.command_error(f"{self.name}: MCU command '{cmd_enum.value}' timed out.")
+            
+            if response.status != 'ok':
+                self._handle_mcu_error(response, command_name)
+            
+            return response
         finally:
             self.active_command = None
-        if (not response):
-            self.logger.warning(f"{self.name}: Response is none!")
-            response={}
-        status_raw = response.get('status','unknown')
-        try:
-            status = status_raw.decode('utf-8') if status_raw is not None else None
-        except Exception:
-            status = None
-        if status != 'ok':
-            cmd_field = response.get('command')
-            try:
-                cmd_field_str = cmd_field.decode('utf-8') if cmd_field is not None else command_name
-            except Exception:
-                cmd_field_str = command_name
-            raw_resp = response.get('raw_response')
-            try:
-                raw_resp_str = raw_resp.decode('utf-8') if raw_resp is not None else 'no details'
-            except Exception:
-                raw_resp_str = 'no details'
-            raise self.printer.command_error(
-                f"{self.name}: Command '{cmd_field_str}' failed with status '{status}'. MCU Response: '{raw_resp_str}'"
-            )
-        return response
+        
+    def _handle_mcu_error(self, response: MCUResponse, cmd_name_fallback):
+        cmd_name = response.command_name or cmd_name_fallback
+        raise self.printer.command_error(
+            f"{self.name}: Command '{cmd_name}' failed with status "
+            f"'{response.status}'. MCU Response: '{response.raw_response}'")
 
     def cmd_GET_LOAD_CELL_WEIGHT(self, gcmd):
         response = self._send_and_wait(MCU_CMD_FLASHFORGE_H7)
-        value_raw = response.get('value')
-        try:
-            weight = int(value_raw or 0)
-        except Exception:
-            weight = 0
-        self.last_weight_grams = weight
-        gcmd.respond_info(f"{self.name}: Weight: {weight:.2f} grams")
+        self.last_weight_grams = response.value
+        gcmd.respond_info(f"{self.name}: Weight: {response.value} grams")
 
     def cmd_LOAD_CELL_TARE(self, gcmd):
         gcmd.respond_info(f"{self.name}: Starting tare procedure...")
@@ -196,19 +164,16 @@ class FlashforgeLoadCell:
             try:
                 self._send_and_wait(MCU_CMD_FLASHFORGE_H1)
                 response = self._send_and_wait(MCU_CMD_FLASHFORGE_H7)
-            except Exception as e:
-                raise gcmd.error(f"{self.name}: Tare step failed: {e}")
-            value_raw = response.get('value')
-            try:
-                current_weight = int(value_raw or 0)
-            except Exception:
-                current_weight = self.last_weight_grams
-            if abs(current_weight) <= self.tare_threshold:
-                gcmd.respond_info(f"{self.name}: Tare successful. Final weight: {current_weight:.2f}g")
+            except self.printer.command_error as e:
+                raise gcmd.error(f"Tare step failed: {e}")
+
+            if abs(response.value) <= self.tare_threshold:
+                gcmd.respond_info(f"Tare successful. Final weight: {response.value}g")
                 return
-            gcmd.respond_info(f"{self.name}: Weight is {current_weight:.2f}g, retrying...")
+            
+            gcmd.respond_info(f"Weight is {response.value}g, retrying...")
             self.reactor.pause(self.reactor.monotonic() + 0.2)
-        raise gcmd.error(f"{self.name}: Tare failed to complete within {self.tare_timeout}s.")
+        raise gcmd.error(f"Tare failed to complete within {self.tare_timeout}s.")
 
     def cmd_LOAD_CELL_CALIBRATE(self, gcmd):
         weight = gcmd.get_int('WEIGHT', 500, 0)
@@ -221,20 +186,13 @@ class FlashforgeLoadCell:
         gcmd.respond_info(f"{self.name}: Save calibration command sent.")
 
     def cmd_LOAD_CELL_TEST(self, gcmd):
-        cmd_str = gcmd.get('CMD')
+        cmd_str = gcmd.get('CMD', None)
         if cmd_str is None:
             raise gcmd.error(f"{self.name}: No CMD parameter provided.")
-        try:
-            cmd_bytes = cmd_str.encode()
-        except Exception as e:
-            raise gcmd.error(f"{self.name}: Invalid CMD parameter: {e}")
+        
+        cmd_bytes = cmd_str.encode('utf-8')
         response = self._send_and_wait(MCU_CMD_FLASHFORGE_TEST, params_list=[cmd_bytes])
-        raw_resp = response.get('raw_response')
-        try:
-            raw_resp_str = raw_resp.decode('utf-8') if raw_resp is not None else ''
-        except Exception:
-            raw_resp_str = ''
-        gcmd.respond_info(f"{self.name}: Response: {raw_resp_str}")
+        gcmd.respond_info(f"{self.name}: Response: {response.raw_response}")
 
 
 class LoadCellSensor:
@@ -266,7 +224,7 @@ class LoadCellSensor:
         weight = self.loadcell.last_weight_grams
         if weight > self.max_force:
             if not self.check_only_when_printing or self.vc.is_active():
-                msg = f"{self.name}: Max force exceeded. Last weight was: {weight:.0f}g"
+                msg = f"{self.name}: Max force exceeded. Last weight was: {weight}g"
                 if self.overload_action == "shutdown":
                     self.printer.invoke_shutdown(msg)
                     return self.reactor.NEVER

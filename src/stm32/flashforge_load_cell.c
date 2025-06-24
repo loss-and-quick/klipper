@@ -325,6 +325,17 @@ DECL_COMMAND(command_flashforge_loadcell_h3,
 
 // Command H7: Get current weight
 void command_flashforge_loadcell_h7(uint32_t *args) {
+  irq_disable();
+  // prevent queue clogging
+  if (cmdq_head != cmdq_tail) {
+    uint8_t last_idx = (cmdq_head - 1 + CMD_QUEUE_SIZE) % CMD_QUEUE_SIZE;
+    if (strcmp(cmd_queue[last_idx].cmd_name, "H7") == 0) {
+      irq_enable();
+      return;
+    }
+  }
+  irq_enable();
+  
   send_flashforge_command("H7", CMD_H7, sizeof(CMD_H7) - 1);
 }
 DECL_COMMAND(command_flashforge_loadcell_h7, "flashforge_loadcell_h7");

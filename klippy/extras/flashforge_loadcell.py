@@ -7,7 +7,7 @@ MCU_FLASHFORGE_RESPONSE = "flashforge_loadcell_response"
 
 MCU_CMD_FLASHFORGE_H1 = "flashforge_loadcell_h1"
 MCU_CMD_FLASHFORGE_H2 = "flashforge_loadcell_h2 weight=%u"
-MCU_CMD_FLASHFORGE_H3 = "flashforge_loadcell_h3"
+MCU_CMD_FLASHFORGE_H3 = "flashforge_loadcell_h3 weight=%u"
 MCU_CMD_FLASHFORGE_H7 = "flashforge_loadcell_h7"
 MCU_CMD_FLASHFORGE_TEST = "flashforge_loadcell_test_cmd cmd=%*s"
 
@@ -55,12 +55,12 @@ class FlashforgeLoadCell:
         self.gcode.register_command(
             "FLASHFORGE_LOAD_CELL_CALIBRATE",
             self.cmd_LOAD_CELL_CALIBRATE,
-            desc="Sends a calibration command (H2 S500)"
+            desc="Sends a calibration command"
         )
         self.gcode.register_command(
             "FLASHFORGE_LOAD_CELL_SAVE_CALIBRATION",
             self.cmd_LOAD_CELL_SAVE_CALIBRATION,
-            desc="Sends calibration save command (H3 S200)"
+            desc="Sends calibration save command"
         )
         self.gcode.register_command(
             "FLASHFORGE_GET_LOAD_CELL_WEIGHT",
@@ -216,7 +216,8 @@ class FlashforgeLoadCell:
         gcmd.respond_info(f"{self.name}: Calibrate command sent.")
 
     def cmd_LOAD_CELL_SAVE_CALIBRATION(self, gcmd):
-        self._send_and_wait(MCU_CMD_FLASHFORGE_H3)
+        weight = gcmd.get_int('WEIGHT', 200, 100)
+        self._send_and_wait(MCU_CMD_FLASHFORGE_H3, params_list=[weight])
         gcmd.respond_info(f"{self.name}: Save calibration command sent.")
 
     def cmd_LOAD_CELL_TEST(self, gcmd):

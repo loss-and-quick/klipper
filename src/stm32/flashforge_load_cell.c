@@ -20,7 +20,6 @@
 
 static const char CMD_H1[] = "H1 \0\0\0\0\0\0\0";
 static const char CMD_H7[] = "H7 \0\0\0\0\0\0\0";
-static const char CMD_H3_S200[] = "H3 S200 \0\0";
 
 struct queued_cmd {
   char cmd_name[16];
@@ -260,36 +259,35 @@ static void send_flashforge_command(const char *cmd_name, const char *cmd_data,
   try_send_next_queued_command();
 }
 
-// Command H1: Tare
-void command_flashforge_loadcell_h1(uint32_t *args) {
-  send_flashforge_command("H1", CMD_H1, sizeof(CMD_H1) - 1);
-}
-DECL_COMMAND(command_flashforge_loadcell_h1, "flashforge_loadcell_h1");
+static void send_weight_command(const char *cmd_name, uint32_t weight) {
+  char cmd_data[32];
+  char *p = cmd_data;
+  size_t cmd_name_len = strlen(cmd_name);
 
-// Command H2: Calibrate by known weight
-void command_flashforge_loadcell_h2(uint32_t *args) {
-  uint32_t weight = args[0];
-  char cmd_buf[32];
-  char *p = cmd_buf;
+  if (cmd_name_len >= sizeof(cmd_data))
+    return;
+  memcpy(p, cmd_name, cmd_name_len);
+  p += cmd_name_len;
 
-  *p++ = 'H';
-  *p++ = '2';
+  if ((p - cmd_data) + 3 >= sizeof(cmd_data))
+    return;
   *p++ = ' ';
   *p++ = 'S';
 
   char *num_start = p;
-  int num_len = 0;
-  unsigned int n = weight;
+  unsigned long n = weight;
 
   if (n == 0) {
+    if ((p - cmd_data) + 1 >= sizeof(cmd_data))
+      return;
     *p++ = '0';
-    num_len = 1;
   } else {
-    while (n > 0 && (p - cmd_buf) < sizeof(cmd_buf) - 1) {
-      *p++ = (n % 10) + '0';
+    char *num_p = p;
+    while (n > 0 && (num_p - cmd_data) < sizeof(cmd_data)) {
+      *num_p++ = (n % 10) + '0';
       n /= 10;
-      num_len++;
     }
+    p = num_p;
 
     char *start = num_start;
     char *end = p - 1;
@@ -302,17 +300,28 @@ void command_flashforge_loadcell_h2(uint32_t *args) {
     }
   }
 
-  int total_len = (p - cmd_buf);
-  send_flashforge_command("H2", cmd_buf, total_len);
+  send_flashforge_command(cmd_name, cmd_data, (p - cmd_data));
+}
+
+// Command H1: Tare
+void command_flashforge_loadcell_h1(uint32_t *args) {
+  send_flashforge_command("H1", CMD_H1, sizeof(CMD_H1) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h1, "flashforge_loadcell_h1");
+
+// Command H2: Calibrate by known weight
+void command_flashforge_loadcell_h2(uint32_t *args) {
+  send_weight_command("H2", args[0]);
 }
 DECL_COMMAND(command_flashforge_loadcell_h2,
              "flashforge_loadcell_h2 weight=%u");
 
-// Command H3: Save calibration
+// Command H3: Save calibration and set weight threshold for Z-Probe pin
 void command_flashforge_loadcell_h3(uint32_t *args) {
-  send_flashforge_command("H3", CMD_H3_S200, sizeof(CMD_H3_S200) - 1);
+  send_weight_command("H3", args[0]);
 }
-DECL_COMMAND(command_flashforge_loadcell_h3, "flashforge_loadcell_h3");
+DECL_COMMAND(command_flashforge_loadcell_h3,
+             "flashforge_loadcell_h3 weight=%u");
 
 // Command H7: Get current weight
 void command_flashforge_loadcell_h7(uint32_t *args) {

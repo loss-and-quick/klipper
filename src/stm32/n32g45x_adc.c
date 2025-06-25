@@ -105,25 +105,34 @@ gpio_adc_setup(uint32_t pin)
                 RCC_AHB_PERIPH_ADC3 | RCC_AHB_PERIPH_ADC4);
     ADC_RCC_AHBPCLKEN = reg_temp;
 
+    // ADCs 1M clock and prescaler setup
+    reg_temp = ADC_RCC_CFG2;
+    reg_temp |= CFG2_ADC1MSEL_SET_MASK; // Set HSE for ADC 1M clock
+    reg_temp &= CFG2_ADC1MPRES_RESET_MASK;
+    reg_temp |= RCC_ADC1MCLK_DIV12; // Divide HSE (12 MHz) to 12 (get needed 1 MHz)
+    ADC_RCC_CFG2 = reg_temp;
+
+    // ADCs CLK prescaler setup
     reg_temp = ADC_RCC_CFG2;
     reg_temp &= CFG2_ADCPLLPRES_RESET_MASK;
-    reg_temp |= RCC_ADCPLLCLK_DIV1;
-    reg_temp &= RCC_ADCPLLCLK_DISABLE;
+    reg_temp |= RCC_ADCPLLCLK_DIV16; // PLL 72 MHz divided by 16 to get 4.5 MHz CLK (we need 4MHz?)
     ADC_RCC_CFG2 = reg_temp;
 
-    reg_temp = ADC_RCC_CFG2;
-    reg_temp &= CFG2_ADCHPRES_RESET_MASK;
-    reg_temp |= RCC_ADCHCLK_DIV16;
-    ADC_RCC_CFG2 = reg_temp;
+    // Configure x ADC CTRL 1
+    reg_temp = adc->CTRL1;
+    reg_temp &= CTRL1_CLR_MASK;
+    adc->CTRL1 = reg_temp;
 
-    ADC_InitType ADC_InitStructure;
-    ADC_InitStructure.WorkMode       = ADC_WORKMODE_INDEPENDENT;
-    ADC_InitStructure.MultiChEn      = 0;
-    ADC_InitStructure.ContinueConvEn = 0;
-    ADC_InitStructure.ExtTrigSelect  = ADC_EXT_TRIGCONV_NONE;
-    ADC_InitStructure.DatAlign       = ADC_DAT_ALIGN_R;
-    ADC_InitStructure.ChsNumber      = 1;
-    ADC_Init(adc, &ADC_InitStructure);
+    // Configure x ADC CTRL 2
+    reg_temp = adc->CTRL2;
+    reg_temp &= CTRL2_CLR_MASK;
+    reg_temp |= ADC_EXT_TRIGCONV_NONE; // Start conversion without external trigger event
+    adc->CTRL2 = reg_temp;
+
+    // Select x ADC CTRL 3
+    reg_temp = adc->CTRL3;
+    reg_temp |= ADC_CTRL3_CKMOD_MSK; // CKMOD = 1 (Select PLL for CLK)
+    adc->CTRL3 = reg_temp;
 
     adc_calibrate(adc);
 
@@ -145,6 +154,9 @@ gpio_adc_sample(struct gpio_adc g)
 {
     ADC_Module *adc = g.adc;
     uint32_t sr = adc->STS;
+
+    uint32_t tmpreg1 = 0, tmpreg2 = 0;
+
     if (sr & ADC_STS_STR) {
         if (!(sr & ADC_STS_ENDC) || adc->RSEQ3 != g.chan)
             // Conversion still in progress or busy on another channel
@@ -152,8 +164,35 @@ gpio_adc_sample(struct gpio_adc g)
         // Conversion ready
         return 0;
     }
+
     // ADC timing: clock=4Mhz, Tconv=12.5, Tsamp=41.5, total=13.500us
-    ADC_ConfigRegularChannel(adc, g.chan, 1, ADC_SAMP_TIME_41CYCLES5);
+
+    if (g.chan == ADC_CH_18) {
+        tmpreg1 = adc->SAMPT3;
+        tmpreg1 &= (~0x00000007);
+        tmpreg1 |= ADC_SAMP_TIME_41CYCLES5;
+        adc->SAMPT3 = tmpreg1;
+    } else if (g.chan > ADC_CH_9) {
+        tmpreg1 = adc->SAMPT1;
+        tmpreg2 = SAMPT1_SMP_SET << (3 * (g.chan - 10));
+        tmpreg1 &= ~tmpreg2;
+        tmpreg2 = (uint32_t)ADC_SAMP_TIME_41CYCLES5 << (3 * (g.chan - 10));
+        tmpreg1 |= tmpreg2;
+        adc->SAMPT1 = tmpreg1;
+    } else {
+        tmpreg1 = adc->SAMPT2;
+        tmpreg2 = SAMPT2_SMP_SET << (3 * g.chan);
+        tmpreg1 &= ~tmpreg2;
+        tmpreg2 = (uint32_t)ADC_SAMP_TIME_41CYCLES5 << (3 * g.chan);
+        tmpreg1 |= tmpreg2;
+        adc->SAMPT2 = tmpreg1;
+    }
+
+    tmpreg1 = adc->RSEQ3;
+    tmpreg1 &= ~SQR3_SEQ_SET;
+    tmpreg1 |= (uint32_t)g.chan;
+    adc->RSEQ3 = tmpreg1;
+
     adc->CTRL2 |= CTRL2_AD_ON_SET;
     adc->CTRL2 |= CTRL2_EXT_TRIG_SWSTART_SET;
 

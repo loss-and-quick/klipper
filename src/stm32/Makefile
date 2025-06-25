@@ -58,7 +58,7 @@ gpio-src-$(CONFIG_MACH_STM32H7) := stm32/stm32h7_gpio.c stm32/gpioperiph.c
 src-y += $(timer-src-y) $(gpio-src-y)
 adc-src-y := stm32/adc.c
 adc-src-$(CONFIG_MACH_STM32F0) := stm32/stm32f0_adc.c
-adc-src-$(CONFIG_MACH_N32G45x) := ../lib/n32g45x/n32g45x_adc.c stm32/n32g45x_adc.c
+adc-src-$(CONFIG_MACH_N32G45x) := stm32/n32g45x_adc.c
 adc-src-$(CONFIG_MACH_STM32G0) := stm32/stm32f0_adc.c
 adc-src-$(CONFIG_MACH_STM32G4) := stm32/stm32h7_adc.c
 adc-src-$(CONFIG_MACH_STM32H7) := stm32/stm32h7_adc.c
@@ -92,11 +92,15 @@ src-$(CONFIG_HAVE_GPIO_SDIO) += stm32/sdio.c
 src-$(CONFIG_FLASHFORGE_LOADCELL) += stm32/flashforge_load_cell.c
 
 # Binary output file rules
-target-y += $(OUT)klipper.bin
+target-y += $(OUT)klipper.bin $(OUT)klipper.hex
 
 $(OUT)klipper.bin: $(OUT)klipper.elf
-	@echo "  Creating hex file $@"
+	@echo "  Creating bin file $@"
 	$(Q)$(OBJCOPY) -O binary $< $@
+
+$(OUT)klipper.hex: $(OUT)klipper.elf
+	@echo "  Creating hex file $@"
+	$(Q)$(OBJCOPY) -O ihex $< $@
 
 # Flash rules
 lib/hidflash/hid-flash:

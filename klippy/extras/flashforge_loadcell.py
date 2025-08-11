@@ -181,7 +181,7 @@ class FlashforgeLoadCell:
         gcmd.respond_info(f"{self.name}: Calibrate command sent.")
 
     def cmd_LOAD_CELL_SAVE_CALIBRATION(self, gcmd):
-        weight = gcmd.get_int('WEIGHT', 200, 100)
+        weight = gcmd.get_int('WEIGHT', 200, 0, 500)
         self._send_and_wait(MCU_CMD_FLASHFORGE_H3, params_list=[weight])
         gcmd.respond_info(f"{self.name}: Save calibration command sent.")
 

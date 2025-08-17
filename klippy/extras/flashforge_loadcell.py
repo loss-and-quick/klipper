@@ -199,6 +199,7 @@ class LoadCellSensor:
     def __init__(self, config, loadcell):
         self.loadcell = loadcell
         self.printer = config.get_printer()
+        self.gcode = self.printer.lookup_object('gcode')
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name().split()[-1]
         self.logger = logging.getLogger('klippy')
@@ -212,9 +213,16 @@ class LoadCellSensor:
                 f"{self.name} requires [pause_resume] to work,"
                 " please add it to your config!")
         self.max_force = config.getint('max_force', 900, 0)
+        self.default_max_force = self.max_force
         self.overload_action = config.getchoice("overload_action", ["shutdown", "pause"], default="shutdown")
+        self.default_overload_action = self.overload_action
         self.sample_timer = self.reactor.register_timer(self._sample)
         self._callback = None
+
+        self.gcode.register_command(FLASHFORGE_LOAD_CELL_SET_MAX_FORCE, 
+                                   self.cmd_SET_LOADCELL_MAX_FORCE,
+                                   desc=f'Set max force and overload action for loadcell sensor')
+
         self.printer.register_event_handler("klippy:connect", self._handle_connect)
 
     def _handle_connect(self):
@@ -250,6 +258,28 @@ class LoadCellSensor:
             self._callback(estimated, weight)
 
         return measured_time + self.sample_interval
+
+    def cmd_SET_LOADCELL_MAX_FORCE(self, gcmd):
+        reset = gcmd.get_int('RESET', 0, 0, 1)
+        
+        if reset:
+            self.max_force = self.default_max_force
+            self.overload_action = self.default_overload_action
+            gcmd.respond_info(f
+                "{self.name}: Max force reset to default value: {self.max_force}g"
+                f"overload action  reset to default value:'{self.overload_action}'"
+            )
+        else:
+            force = gcmd.get_int('FORCE', self.max_force, 0)
+            overload_action = gcmd.get('ACTION', self.overload_action, lambda x: str(x) if str(x) in in ['shutdown', 'pause'] else raise Exception())
+            old_force = self.max_force
+            old_action = self.overload_action
+            self.max_force = force
+            self.overload_action = action
+            gcmd.respond_info(
+                f"{self.name}: Max force changed from {old_force}g to {self.max_force}g; "
+                f"overload action changed from '{old_action}' to '{self.overload_action}'"
+            )
 
     def setup_callback(self, cb):
         self._callback = cb

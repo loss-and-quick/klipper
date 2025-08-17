@@ -194,6 +194,8 @@ class FlashforgeLoadCell:
         response = self._send_and_wait(MCU_CMD_FLASHFORGE_TEST, params_list=[cmd_bytes])
         gcmd.respond_info(f"{self.name}: Response: {response.raw_response}")
 
+    def get_status(self, eventtime):
+        return {'force_g': self.loadcell.last_weight_grams}
 
 class LoadCellSensor:
     def __init__(self, config, loadcell):
@@ -294,7 +296,7 @@ class LoadCellSensor:
         return self.loadcell.last_weight_grams, 0
 
     def get_status(self, eventtime):
-        return {'temperature': self.loadcell.last_weight_grams}
+        return {'temperature': self.loadcell.last_weight_grams, **self.loadcell.get_status(eventtime)}
 
 
 def load_config(config):

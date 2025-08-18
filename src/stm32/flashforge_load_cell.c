@@ -90,7 +90,7 @@ static void try_send_next_queued_command(void) {
   }
 }
 
-void UARTx_IRQHandler(void) {
+void LOADCELL_UARTx_IRQHandler(void) {
   uint32_t sr = UARTx->SR;
 
   if (sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) {
@@ -372,7 +372,7 @@ void flashforge_loadcell_init(void) {
 
   UARTx->CR1 = USART_CR1_UE | USART_CR1_TE | USART_CR1_RE | USART_CR1_RXNEIE;
 
-  armcm_enable_irq(UARTx_IRQHandler, UARTx_IRQn, 1);
+  armcm_enable_irq(LOADCELL_UARTx_IRQHandler, UARTx_IRQn, 1);
 }
 DECL_INIT(flashforge_loadcell_init);
 

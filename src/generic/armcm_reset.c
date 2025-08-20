@@ -41,10 +41,35 @@ try_request_canboot(void)
     canboot_reset(CANBOOT_REQUEST);
 }
 
+static void
+flashforge_command_reset(void)
+{
+    // Notify bootloader to immediately launch application after reset
+
+    irq_disable();
+    // Enable PWR and BKP peripheral clocks
+    RCC->APB1ENR |= RCC_APB1ENR_PWREN | RCC_APB1ENR_BKPEN;
+    // Allow access to the backup domain
+    PWR->CR |= PWR_CR_DBP;
+    // Write magic value into backup register DR1
+    BKP->DR1 = 0x1234;
+    PWR->CR &= ~PWR_CR_DBP;
+
+    NVIC_SystemReset();
+}
+
 void
 command_reset(uint32_t *args)
 {
-    canboot_reset(CANBOOT_BYPASS);
-    NVIC_SystemReset();
+    if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
+    {
+        // Bootloader bypass for Flashforge 5M(Pro) eboard MCU
+        flashforge_command_reset();
+    }
+    else
+    {
+        canboot_reset(CANBOOT_BYPASS);
+        NVIC_SystemReset();
+    }
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");

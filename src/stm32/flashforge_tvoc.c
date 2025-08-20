@@ -8,8 +8,8 @@
 #include <stdint.h>   // Standard integer types
 #include <string.h>   // String functions (memset, strncpy, strstr)
 
-#define USARTx USART3
-#define USARTx_IRQn USART3_IRQn
+#define UARTx UART4
+#define UARTx_IRQn UART4_IRQn
 
 #define BAUDRATE 9600U
 #define RXBUF_SIZE 128
@@ -120,18 +120,18 @@ static void process_tvoc_packet(void) {
   }
 }
 
-void TVOC_USARTx_IRQHandler(void) {
-  uint32_t sr = USARTx->SR;
+void TVOC_UARTx_IRQHandler(void) {
+  uint32_t sr = UARTx->SR;
   
   if (sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) {
     if (sr & USART_SR_ORE) {
-      (void)USARTx->DR;
+      (void)UARTx->DR;
     }
-    USARTx->SR &= ~(USART_SR_NE | USART_SR_FE | USART_SR_PE);
+    UARTx->SR &= ~(USART_SR_NE | USART_SR_FE | USART_SR_PE);
   }
   
   if (sr & USART_SR_RXNE) {
-    uint8_t data = USARTx->DR;
+    uint8_t data = UARTx->DR;
     uint16_t next = (tvoc.rx_head + 1) % RXBUF_SIZE;
     
     if (next != tvoc.rx_tail) {
@@ -167,7 +167,7 @@ DECL_TASK(flashforge_tvoc_task);
 void flashforge_tvoc_init(void) {
   memset(&tvoc, 0, sizeof(tvoc));
   
-  enable_pclock((uint32_t)USARTx);
+  enable_pclock((uint32_t)UARTx);
   
   gpio_clock_enable(GPIOC);
 
@@ -179,21 +179,21 @@ void flashforge_tvoc_init(void) {
   GPIOC->CRH &= ~(0xF << 12);
   GPIOC->CRH |= (0x4 << 12); // 0100 = Floating input
 
-  USARTx->CR1 = 0;
-  USARTx->CR2 = 0;
-  USARTx->CR3 = 0;
+  UARTx->CR1 = 0;
+  UARTx->CR2 = 0;
+  UARTx->CR3 = 0;
   
-  uint32_t pclk = get_pclock_frequency((uint32_t)USARTx);
-  USARTx->BRR = DIV_ROUND_CLOSEST(pclk, BAUDRATE);
+  uint32_t pclk = get_pclock_frequency((uint32_t)UARTx);
+  UARTx->BRR = DIV_ROUND_CLOSEST(pclk, BAUDRATE);
   
   // We don't need TX for this sensor, only RX
-  USARTx->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_RXNEIE;
+  UARTx->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_RXNEIE;
   
-  armcm_enable_irq(TVOC_USARTx_IRQHandler, USARTx_IRQn, 1);
+  armcm_enable_irq(TVOC_UARTx_IRQHandler, UARTx_IRQn, 2);
 }
 DECL_INIT(flashforge_tvoc_init);
 
 void flashforge_tvoc_shutdown(void) {
-  USARTx->CR1 &= ~USART_CR1_UE;
+  UARTx->CR1 &= ~USART_CR1_UE;
 }
 DECL_SHUTDOWN(flashforge_tvoc_shutdown);

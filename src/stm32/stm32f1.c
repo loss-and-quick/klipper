@@ -242,6 +242,14 @@ usb_stm32duino_bootloader(void)
     NVIC_SystemReset();
 }
 
+// Reboot into serial bootloader of Flashforge 5M(Pro) eboard MCU
+static void
+flashforge_bootloader_request(void)
+{
+   // Only MCU reset is needed, starting the bootloader is the default behavior
+   NVIC_SystemReset();
+}
+
 // Handle reboot requests
 void
 bootloader_request(void)
@@ -251,6 +259,8 @@ bootloader_request(void)
         usb_hid_bootloader();
     else if (CONFIG_STM32_FLASH_START_2000)
         usb_stm32duino_bootloader();
+    else if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
+        flashforge_bootloader_request();
 }
 
 

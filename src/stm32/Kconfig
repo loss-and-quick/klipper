@@ -578,3 +578,10 @@ config FLASHFORGE_LOADCELL
     help
       Enable support for communicating with the Flashforge Load Cell via UART5.
       Uses PC12 (TX) and PD2 (RX) by default.
+
+config FLASHFORGE_TVOC
+    bool "Enable Flashforge TVOC support"
+    depends on MACH_STM32F1 || MACH_N32G45x
+    help
+      Enable support for communicating with the Flashforge TVOC via UART4.
+      Uses PC10 (TX) and PC11 (RX) by default.

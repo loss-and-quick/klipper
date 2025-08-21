@@ -170,10 +170,6 @@ void flashforge_tvoc_init(void) {
   enable_pclock((uint32_t)UARTx);
   
   gpio_clock_enable(GPIOC);
-
-  // PC10 (TX) - AF output push-pull (not used for transmitting, but configure anyway)
-  GPIOC->CRH &= ~(0xF << 8);
-  GPIOC->CRH |= (0x9 << 8); // 1001 = AF PP, 10MHz
   
   // PC11 (RX) - Floating input
   GPIOC->CRH &= ~(0xF << 12);

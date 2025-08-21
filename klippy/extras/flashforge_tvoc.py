@@ -11,8 +11,12 @@ class MCUResponse:
         self.status = self._decode(params.get('status'), 'unknown')
         try:
             self.tvoc = int(params.get('tvoc', 0))
+            self.co2 = int(params.get('co2', 0))
+            self.hcho = int(params.get('hcho', 0))
         except:
             self.tvoc = 0
+            self.co2 = 0
+            self.hcho = 0
 
     def _decode(self, value, default=''):
         if value is None: 
@@ -34,6 +38,8 @@ class FlashforgeTVOC:
         self.logger = logging.getLogger('klippy')
         
         self.last_tvoc_value = 0
+        self.last_co2_value = 0
+        self.last_hcho_value = 0
         self.last_status = 'unknown'
         
         self.gcode.register_command(
@@ -44,21 +50,31 @@ class FlashforgeTVOC:
 
     def _handle_tvoc_response(self, params):
         response = MCUResponse(params)
-        self.logger.debug(f"{self.name}: TVOC response: {response.tvoc} µg/m³, status: {response.status}")
+        self.logger.debug(f"{self.name}:"
+                         f"TVOC: {response.tvoc} µg/m³, "
+                         f"CO2: {response.co2} ppm, "
+                         f"HCHO: {response.hcho} µg/m³, "
+                         f"Status: {response.status}")
         
-        if response.status == 'ok':
-            self.last_tvoc_value = response.tvoc
-            self.last_status = response.status
+        self.last_tvoc_value = response.tvoc
+        self.last_co2_value = response.co2
+        self.last_hcho_value = response.hcho
+        self.last_status = response.status
            
     def cmd_GET_TVOC(self, gcmd):
         gcmd.respond_info(
-                    f"{self.name}: TVOC: {self.last_tvoc_value} µg/m³, "
-                    f"Status: {self.last_status}, "
-                )
+            f"{self.name}:1"
+            f"TVOC: {self.last_tvoc_value} µg/m³, "
+            f"CO2: {self.last_co2_value} ppm, "
+            f"Formaldehyde: {self.last_hcho_value} µg/m³, "
+            f"Status: {self.last_status}"
+        )
 
     def get_status(self, eventtime):
         return {
             'tvoc': self.last_tvoc_value,
+            'co2': self.last_co2_value,
+            'hcho': self.last_hcho_value,
             'status': self.last_status,
         }
 

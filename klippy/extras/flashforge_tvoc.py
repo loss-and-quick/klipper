@@ -3,6 +3,8 @@ import mcu
 
 MCU_TVOC_RESPONSE = "flashforge_tvoc_response"
 
+REPORT_TIME = 0.5
+
 class MCUResponse:
     def __init__(self, params):
         self.params = params
@@ -67,14 +69,27 @@ class TVOCSensor:
         self.reactor = self.printer.get_reactor()
         self.name = config.get_name().split()[-1]
         self.logger = logging.getLogger('klippy')
-        
+
+        self.sample_timer = self.reactor.register_timer(self._sample)
+
         self._callback = None
+
+        self.printer.register_event_handler("klippy:connect", self._handle_connect)
+
+    def _handle_connect(self):
+        self.reactor.update_timer(self.sample_timer, self.reactor.NOW)
+
+    def _sample(self, eventtime):
+        measured_time = self.reactor.monotonic()
+        if self._callback:
+            self._callback(self.tvoc.mcu.estimated_print_time(measured_time), self.tvoc.last_tvoc_value)
+        return measured_time + 0.5
 
     def setup_callback(self, cb):
         self._callback = cb
 
     def get_report_time_delta(self):
-        return 0.5
+        return REPORT_TIME
 
     def setup_minmax(self, min_temp, max_temp):
         pass

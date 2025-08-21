@@ -189,7 +189,7 @@ void flashforge_tvoc_init(void) {
   // We don't need TX for this sensor, only RX
   UARTx->CR1 = USART_CR1_UE | USART_CR1_RE | USART_CR1_RXNEIE;
   
-  armcm_enable_irq(TVOC_UARTx_IRQHandler, UARTx_IRQn, 2);
+  armcm_enable_irq(TVOC_UARTx_IRQHandler, UARTx_IRQn, 1);
 }
 DECL_INIT(flashforge_tvoc_init);
 

@@ -99,7 +99,7 @@ class TVOCSensor:
         measured_time = self.reactor.monotonic()
         if self._callback:
             self._callback(self.tvoc.mcu.estimated_print_time(measured_time), self.tvoc.last_tvoc_value)
-        return measured_time + 0.5
+        return measured_time + REPORT_TIME
 
     def setup_callback(self, cb):
         self._callback = cb

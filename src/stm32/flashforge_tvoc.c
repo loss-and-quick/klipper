@@ -18,13 +18,19 @@
 #define TVOC_HEADER_1 0xFF
 #define TVOC_HEADER_2 0x18
 
+struct tvoc_readings {
+  uint16_t co2_ppm;
+  uint16_t tvoc_ugm3;
+  uint16_t hcho_ugm3;
+};
+
 struct tvoc_state {
   uint8_t rxbuf[RXBUF_SIZE];
   volatile uint16_t rx_head, rx_tail;
   
   volatile uint8_t rx_overflow;
   
-  uint16_t last_tvoc_value;
+  struct tvoc_readings last_readings;
 };
 
 static struct tvoc_state tvoc;
@@ -42,10 +48,10 @@ static uint8_t calculate_tvoc_checksum(uint8_t *packet) {
 }
 
 // Validate and parse TVOC packet
-static int parse_tvoc_packet(uint8_t *packet, uint16_t *tvoc_value) {
+static int parse_tvoc_packet(uint8_t *packet, struct tvoc_readings *readings) {
   // Check header
   if (packet[0] != TVOC_HEADER_1 || packet[1] != TVOC_HEADER_2) {
-    return 0;
+    return -1;
   }
   
   // Verify checksum
@@ -54,13 +60,16 @@ static int parse_tvoc_packet(uint8_t *packet, uint16_t *tvoc_value) {
     return 0;
   }
   
-  // Extract TVOC value (bytes 4-5, big-endian)
-  *tvoc_value = (packet[4] << 8) | packet[5];
+  readings->co2_ppm = (packet[2] << 8) | packet[3];           // Bytes 2-3: CO2
+  readings->tvoc_ugm3 = (packet[4] << 8) | packet[5];        // Bytes 4-5: TVOC  
+  readings->hcho_ugm3 = (packet[6] << 8) | packet[7];        // Bytes 6-7: CH₂O
+  
   return 1;
 }
 
-static void flashforge_tvoc_response_send(uint16_t tvoc_value, const char *status) {
-  sendf("flashforge_tvoc_response tvoc=%u status=%s", tvoc_value, status);
+static void flashforge_tvoc_response_send(struct tvoc_readings *readings, const char *status) {
+  sendf("flashforge_tvoc_response co2=%u tvoc=%u hcho=%u status=%s", 
+        readings->co2_ppm, readings->tvoc_ugm3, readings->hcho_ugm3, status);
 }
 
 static void process_tvoc_packet(void) {
@@ -104,12 +113,16 @@ static void process_tvoc_packet(void) {
       continue;
     }
     
-    uint16_t tvoc_value;
-    if (parse_tvoc_packet(packet, &tvoc_value)) {
-      tvoc.last_tvoc_value = tvoc_value;
-      flashforge_tvoc_response_send(tvoc_value, "ok");
-    } else {
-      flashforge_tvoc_response_send(0, "checksum_error");
+    struct tvoc_readings readings;
+    int status = parse_tvoc_packet(packet, &readings);
+    
+    if (status == 1) {
+      tvoc.last_readings = readings;
+      flashforge_tvoc_response_send(&readings, "ok");
+    } else if (status == 0) {
+      flashforge_tvoc_response_send(&tvoc.last_readings, "checksum_error");
+    } else if (status == -1) {
+      flashforge_tvoc_response_send(&tvoc.last_readings, "header_error");
     }
     
     irq_disable();
@@ -149,7 +162,7 @@ void flashforge_tvoc_task(void) {
     irq_disable();
     tvoc.rx_head = tvoc.rx_tail;
     irq_enable();
-    flashforge_tvoc_response_send(0, "rx_overflow");
+    flashforge_tvoc_response_send(&tvoc.last_readings, "rx_overflow");
   }
   
   if (!sched_check_wake(&tvoc_wake))

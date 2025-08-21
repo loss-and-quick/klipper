@@ -22,7 +22,6 @@ struct tvoc_state {
   uint8_t rxbuf[RXBUF_SIZE];
   volatile uint16_t rx_head, rx_tail;
   
-  volatile uint8_t packet_ready;
   volatile uint8_t rx_overflow;
   
   uint16_t last_tvoc_value;
@@ -68,7 +67,6 @@ static void process_tvoc_packet(void) {
   irq_disable();
   uint16_t head = tvoc.rx_head;
   uint16_t tail = tvoc.rx_tail;
-  tvoc.packet_ready = 0;
   irq_enable();
   
   while ((head - tail + RXBUF_SIZE) % RXBUF_SIZE >= TVOC_PACKET_SIZE) {
@@ -137,7 +135,6 @@ void TVOC_UARTx_IRQHandler(void) {
     if (next != tvoc.rx_tail) {
       tvoc.rxbuf[tvoc.rx_head] = data;
       tvoc.rx_head = next;
-      tvoc.packet_ready = 1;
       sched_wake_task(&tvoc_wake);
     } else {
       tvoc.rx_overflow = 1;
@@ -158,9 +155,7 @@ void flashforge_tvoc_task(void) {
   if (!sched_check_wake(&tvoc_wake))
     return;
     
-  if (tvoc.packet_ready) {
-    process_tvoc_packet();
-  }
+  process_tvoc_packet();
 }
 DECL_TASK(flashforge_tvoc_task);
 

@@ -63,7 +63,7 @@ class FlashforgeTVOC:
            
     def cmd_GET_TVOC(self, gcmd):
         gcmd.respond_info(
-            f"{self.name}:1"
+            f"{self.name}: "
             f"TVOC: {self.last_tvoc_value} µg/m³, "
             f"CO2: {self.last_co2_value} ppm, "
             f"Formaldehyde: {self.last_hcho_value} µg/m³, "

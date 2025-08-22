@@ -41,6 +41,7 @@ try_request_canboot(void)
     canboot_reset(CANBOOT_REQUEST);
 }
 
+#if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
 static void
 flashforge_command_reset(void)
 {
@@ -57,19 +58,17 @@ flashforge_command_reset(void)
 
     NVIC_SystemReset();
 }
+#endif
 
 void
 command_reset(uint32_t *args)
 {
-    if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
-    {
+    #if (CONFIG_MACH_N32G455 && CONFIG_STM32_FLASH_START_10000)
         // Bootloader bypass for Flashforge 5M(Pro) eboard MCU
         flashforge_command_reset();
-    }
-    else
-    {
+    #else
         canboot_reset(CANBOOT_BYPASS);
         NVIC_SystemReset();
-    }
+    #endif
 }
 DECL_COMMAND_FLAGS(command_reset, HF_IN_SHUTDOWN, "reset");

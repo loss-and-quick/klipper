@@ -253,11 +253,7 @@ class LoadCellSensor:
                         self.gcode.run_script_from_command("PAUSE\nM400\n")
         measured_time = self.reactor.monotonic()
         if self._callback:
-            try:
-                estimated = self.loadcell.mcu.estimated_print_time(measured_time)
-            except Exception:
-                estimated = None
-            self._callback(estimated, weight)
+            self._callback(self.loadcell.mcu.estimated_print_time(measured_time), weight)
 
         return measured_time + self.sample_interval
 

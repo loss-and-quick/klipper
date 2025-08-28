@@ -16,6 +16,7 @@ COMPILE_ARGS = ("-Wall -g -O2 -shared -fPIC"
                 " -flto -fwhole-program -fno-use-linker-plugin"
                 " -o %s %s")
 SSE_FLAGS = "-mfpmath=sse -msse2"
+NEON_FLAGS = "-mfpu=neon"
 SOURCE_FILES = [
     'pyhelper.c', 'serialqueue.c', 'stepcompress.c', 'steppersync.c',
     'itersolve.c', 'trapq.c', 'pollreactor.c', 'msgblock.c', 'trdispatch.c',
@@ -286,6 +287,8 @@ def check_build_c_library():
     # Select command line options
     if check_gcc_option(SSE_FLAGS):
         cmd = "%s %s %s" % (GCC_CMD, SSE_FLAGS, COMPILE_ARGS)
+    elif check_gcc_option(NEON_FLAGS):
+        cmd = "%s %s %s" % (GCC_CMD, NEON_FLAGS, COMPILE_ARGS)
     else:
         cmd = "%s %s" % (GCC_CMD, COMPILE_ARGS)
     # Invoke compiler

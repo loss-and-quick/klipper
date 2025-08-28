@@ -4,6 +4,7 @@
 //
 // This file may be distributed under the terms of the GNU GPLv3 license.
 
+#include <math.h> // tanh, fabs, exp, isfinite
 #include <stddef.h> // offsetof
 #include <stdlib.h> // malloc
 #include <string.h> // memset
@@ -13,8 +14,17 @@
 #include "pyhelper.h" // errorf
 #include "trapq.h" // move_get_distance
 
+enum pa_method {
+    PA_METHOD_LINEAR = 0,
+    PA_METHOD_TANH,
+    PA_METHOD_EXP,
+    PA_METHOD_RECIP,
+    PA_METHOD_SIGMOID
+};
+
 struct pa_params {
-    double pressure_advance, active_print_time;
+    int method;
+    double pressure_advance, offset, linv, active_print_time;
     struct list_node node;
 };
 
@@ -56,61 +66,79 @@ extruder_integrate_time(double base, double start_v, double half_accel
     return ei - si;
 }
 
-// Calculate the definitive integral of extruder for a given move
+// Calculate non-linear pressure advance correction
 static double
-pa_move_integrate(struct move *m, struct list_head *pa_list
-                  , double base, double start, double end, double time_offset)
+calc_nonlinear_pa(double pa_velocity, struct pa_params *pa)
+{
+    if (!pa || !isfinite(pa_velocity) || 
+        !isfinite(pa->offset) || pa->offset == 0.0 || 
+        !isfinite(pa->linv) || pa->linv == 0.0)
+        return 0.0;
+    
+    double rel_v = pa_velocity / pa->linv;
+    
+    switch(pa->method) {
+    case PA_METHOD_TANH:
+        return pa->offset * tanh(rel_v);
+        
+    case PA_METHOD_EXP: {
+        double abs_rel_v = fabs(rel_v);
+        double sign = rel_v >= 0.0 ? 1.0 : -1.0;
+        return pa->offset * sign * (1.0 - exp(-abs_rel_v));
+    }
+    
+    case PA_METHOD_RECIP: {
+        double abs_rel_v = fabs(rel_v);
+        return pa->offset * rel_v / (1.0 + abs_rel_v);
+    }
+    
+    case PA_METHOD_SIGMOID:
+        if (fabs(rel_v) > 20.0) {
+            rel_v = rel_v > 0 ? 20.0 : -20.0;
+        }
+        return pa->offset * (2.0 / (1.0 + exp(-rel_v)) - 1.0);
+        
+    default:
+        return 0.0;
+    }
+}
+
+static double
+pa_velocity_integrate(struct move *m, double start, double end, double time_offset)
 {
     if (start < 0.)
         start = 0.;
     if (end > m->move_t)
         end = m->move_t;
-    // Determine pressure_advance value
-    int can_pressure_advance = m->axes_r.y != 0.;
-    double pressure_advance = 0.;
-    if (can_pressure_advance) {
-        struct pa_params *pa = list_last_entry(pa_list, struct pa_params, node);
-        while (unlikely(pa->active_print_time > m->print_time) &&
-                !list_is_first(&pa->node, pa_list)) {
-            pa = list_prev_entry(pa, node);
-        }
-        pressure_advance = pa->pressure_advance;
-    }
-    // Calculate base position and velocity with pressure advance
-    base += pressure_advance * m->start_v;
-    double start_v = m->start_v + pressure_advance * 2. * m->half_accel;
-    // Calculate definitive integral
+    
+    double start_v = m->start_v;
     double ha = m->half_accel;
-    double iext = extruder_integrate(base, start_v, ha, start, end);
-    double wgt_ext = extruder_integrate_time(base, start_v, ha, start, end);
-    return wgt_ext - time_offset * iext;
+    double ivel = extruder_integrate(start_v, 2. * ha, 0., start, end);
+    double wgt_vel = extruder_integrate_time(start_v, 2. * ha, 0., start, end);
+    return wgt_vel - time_offset * ivel;
 }
 
-// Calculate the definitive integral of the extruder over a range of moves
 static double
-pa_range_integrate(struct move *m, double move_time
-                   , struct list_head *pa_list, double hst)
+pa_velocity_range_integrate(struct move *m, double move_time, double hst)
 {
-    // Calculate integral for the current move
+    // Calculate velocity integral for the current move
     double res = 0., start = move_time - hst, end = move_time + hst;
-    double start_base = m->start_pos.x;
-    res += pa_move_integrate(m, pa_list, 0., start, move_time, start);
-    res -= pa_move_integrate(m, pa_list, 0., move_time, end, end);
+    res += pa_velocity_integrate(m, start, move_time, start);
+    res -= pa_velocity_integrate(m, move_time, end, end);
+    
     // Integrate over previous moves
     struct move *prev = m;
     while (unlikely(start < 0.)) {
         prev = list_prev_entry(prev, node);
         start += prev->move_t;
-        double base = prev->start_pos.x - start_base;
-        res += pa_move_integrate(prev, pa_list, base, start
-                                 , prev->move_t, start);
+        res += pa_velocity_integrate(prev, start, prev->move_t, start);
     }
+    
     // Integrate over future moves
     while (unlikely(end > m->move_t)) {
         end -= m->move_t;
         m = list_next_entry(m, node);
-        double base = m->start_pos.x - start_base;
-        res -= pa_move_integrate(m, pa_list, base, 0., end, end);
+        res -= pa_velocity_integrate(m, 0., end, end);
     }
     return res;
 }
@@ -126,18 +154,47 @@ extruder_calc_position(struct stepper_kinematics *sk, struct move *m
                        , double move_time)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
+
+    double base_pos = m->start_pos.x + move_get_distance(m, move_time);
+
     double hst = es->half_smooth_time;
     if (!hst)
         // Pressure advance not enabled
-        return m->start_pos.x + move_get_distance(m, move_time);
-    // Apply pressure advance and average over smooth_time
-    double area = pa_range_integrate(m, move_time, &es->pa_list, hst);
-    return m->start_pos.x + area * es->inv_half_smooth_time2;
+        return base_pos;
+    
+    // Determine PA parameters
+    struct pa_params *pa = NULL;
+    if (!list_empty(&es->pa_list)) {
+        pa = list_last_entry(&es->pa_list, struct pa_params, node);
+        while (unlikely(pa->active_print_time > m->print_time) &&
+                !list_is_first(&pa->node, &es->pa_list)) {
+            pa = list_prev_entry(pa, node);
+        }
+    }
+
+    if (!pa || (pa->pressure_advance == 0.0 && pa->offset == 0.0)) {
+        return base_pos;
+    }
+
+    double pa_velocity = 0.0;
+    if (m->axes_r.y != 0.) {
+        pa_velocity = pa_velocity_range_integrate(m, move_time, hst) * es->inv_half_smooth_time2;
+    }
+
+    double pa_adj = 0.0;
+    if (pa->method == PA_METHOD_LINEAR) {
+        pa_adj = pa->pressure_advance * pa_velocity;
+    } else {
+        pa_adj = calc_nonlinear_pa(pa_velocity, pa); 
+    }
+
+    return base_pos + pa_adj;
 }
 
 void __visible
 extruder_set_pressure_advance(struct stepper_kinematics *sk, double print_time
-                              , double pressure_advance, double smooth_time)
+                              , double pressure_advance, double smooth_time 
+                              , int method, double offset, double linv)
 {
     struct extruder_stepper *es = container_of(sk, struct extruder_stepper, sk);
     double hst = smooth_time * .5, old_hst = es->half_smooth_time;
@@ -145,30 +202,42 @@ extruder_set_pressure_advance(struct stepper_kinematics *sk, double print_time
     es->sk.gen_steps_pre_active = es->sk.gen_steps_post_active = hst;
 
     // Cleanup old pressure advance parameters
-    double cleanup_time = sk->last_flush_time - (old_hst > hst ? old_hst : hst);
-    struct pa_params *first_pa = list_first_entry(
-            &es->pa_list, struct pa_params, node);
-    while (!list_is_last(&first_pa->node, &es->pa_list)) {
-        struct pa_params *next_pa = list_next_entry(first_pa, node);
-        if (next_pa->active_print_time >= cleanup_time) break;
-        list_del(&first_pa->node);
-        first_pa = next_pa;
+    if (sk->last_flush_time > 0.0) {
+        double cleanup_time = sk->last_flush_time - (old_hst > hst ? old_hst : hst);
+        while (!list_empty(&es->pa_list)) {
+            struct pa_params *first_pa = list_first_entry(
+                    &es->pa_list, struct pa_params, node);
+            if (list_is_last(&first_pa->node, &es->pa_list) ||
+                list_next_entry(first_pa, node)->active_print_time >= cleanup_time)
+                break;
+            list_del(&first_pa->node);
+            free(first_pa);
+        }
     }
 
     if (! hst)
         return;
     es->inv_half_smooth_time2 = 1. / (hst * hst);
 
-    if (list_last_entry(&es->pa_list, struct pa_params, node)->pressure_advance
-            == pressure_advance) {
-        // Retain old pa_params
-        return;
+    // Check if we can reuse last parameters
+    if (!list_empty(&es->pa_list)) {
+        struct pa_params *last_pa = list_last_entry(&es->pa_list, struct pa_params, node);
+        if (last_pa->pressure_advance == pressure_advance &&
+            last_pa->method == method &&
+            last_pa->offset == offset &&
+            last_pa->linv == linv) {
+            return;
+        }
     }
+    
     // Add new pressure advance parameters
     struct pa_params *pa = malloc(sizeof(*pa));
     memset(pa, 0, sizeof(*pa));
     pa->pressure_advance = pressure_advance;
     pa->active_print_time = print_time;
+    pa->method = method;
+    pa->offset = offset;
+    pa->linv = linv != 0.0 ? linv : 1.0;
     list_add_tail(&pa->node, &es->pa_list);
 }
 
@@ -180,8 +249,12 @@ extruder_stepper_alloc(void)
     es->sk.calc_position_cb = extruder_calc_position;
     es->sk.active_flags = AF_X;
     list_init(&es->pa_list);
+    
+    // Initialize with default linear PA parameters
     struct pa_params *pa = malloc(sizeof(*pa));
     memset(pa, 0, sizeof(*pa));
+    pa->method = PA_METHOD_LINEAR;
+    pa->linv = 1.0;
     list_add_tail(&pa->node, &es->pa_list);
     return &es->sk;
 }

@@ -117,7 +117,7 @@ class FlashforgeLoadCell:
             self.last_weight_grams = response.value
 
     def _send_and_wait(self, command_name, params_list=None):
-       if self.active_command:
+        if self.active_command:
             raise self.printer.command_error(f"{self.name}: Another G-Code command is already in progress.")
 
         cmd_obj = self.supported_cmds.get(command_name)
@@ -195,7 +195,7 @@ class FlashforgeLoadCell:
         gcmd.respond_info(f"{self.name}: Response: {response.raw_response}")
 
     def get_status(self, eventtime):
-        return {'force_g': self.loadcell.last_weight_grams}
+        return {'force_g': self.last_weight_grams}
 
 class LoadCellSensor:
     def __init__(self, config, loadcell):
@@ -221,7 +221,7 @@ class LoadCellSensor:
         self.sample_timer = self.reactor.register_timer(self._sample)
         self._callback = None
 
-        self.gcode.register_command(FLASHFORGE_LOAD_CELL_SET_MAX_FORCE, 
+        self.gcode.register_command("FLASHFORGE_LOAD_CELL_SET_MAX_FORCE", 
                                    self.cmd_SET_LOADCELL_MAX_FORCE,
                                    desc=f'Set max force and overload action for loadcell sensor')
 
@@ -263,13 +263,13 @@ class LoadCellSensor:
         if reset:
             self.max_force = self.default_max_force
             self.overload_action = self.default_overload_action
-            gcmd.respond_info(f
-                "{self.name}: Max force reset to default value: {self.max_force}g"
+            gcmd.respond_info(
+                f"{self.name}: Max force reset to default value: {self.max_force}g"
                 f"overload action  reset to default value:'{self.overload_action}'"
             )
         else:
             force = gcmd.get_int('FORCE', self.max_force, 0)
-            overload_action = gcmd.get('ACTION', self.overload_action, lambda x: str(x) if str(x) in in ['shutdown', 'pause'] else raise Exception())
+            overload_action = gcmd.get('ACTION', self.overload_action, lambda x: str(x) if str(x) in ['shutdown', 'pause'] else gcmd.error("Must be 'shutdown' or 'pause'"))
             old_force = self.max_force
             old_action = self.overload_action
             self.max_force = force

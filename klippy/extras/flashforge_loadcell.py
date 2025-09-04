@@ -165,15 +165,15 @@ class FlashforgeLoadCell:
                 self._send_and_wait(MCU_CMD_FLASHFORGE_H1)
                 response = self._send_and_wait(MCU_CMD_FLASHFORGE_H7)
             except self.printer.command_error as e:
-                raise gcmd.error(f"Tare step failed: {e}")
+                raise gcmd.error(f"{self.name}: Tare step failed: {e}")
 
             if abs(response.value) <= self.tare_threshold:
-                gcmd.respond_info(f"Tare successful. Final weight: {response.value}g")
+                gcmd.respond_info(f"{self.name}: Tare successful. Final weight: {response.value}g")
                 return
             
-            gcmd.respond_info(f"Weight is {response.value}g, retrying...")
+            gcmd.respond_info(f"{self.name}: Weight is {response.value}g, retrying...")
             self.reactor.pause(self.reactor.monotonic() + 0.2)
-        raise gcmd.error(f"Tare failed to complete within {self.tare_timeout}s.")
+        raise gcmd.error(f"{self.name}: Tare failed to complete within {self.tare_timeout}s.")
 
     def cmd_LOAD_CELL_CALIBRATE(self, gcmd):
         weight = gcmd.get_int('WEIGHT', 500, 0)
@@ -236,13 +236,13 @@ class LoadCellSensor:
             if cmd_obj and not self.loadcell.active_command:
                 cmd_obj.send()
         except Exception as e:
-            self.logger.warning(f"{self.name}: Could not send H7 poll: {e}")
+            self.logger.warning(f"{self.loadcell.name}: Could not send H7 poll: {e}")
         weight = self.loadcell.last_weight_grams
         if weight > self.max_force:
             idle_timeout = self.printer.lookup_object("idle_timeout")
             is_printing = idle_timeout.get_status(eventtime)["state"] == "Printing"
             if not self.check_only_when_printing or is_printing:
-                msg = f"{self.name}: Max force exceeded. Last weight was: {weight}g"
+                msg = f"{self.loadcell.name}: Max force exceeded. Last weight was: {weight}g"
                 if self.overload_action == "shutdown":
                     self.printer.invoke_shutdown(msg)
                     return self.reactor.NEVER
@@ -264,8 +264,8 @@ class LoadCellSensor:
             self.max_force = self.default_max_force
             self.overload_action = self.default_overload_action
             gcmd.respond_info(
-                f"{self.name}: Max force reset to default value: {self.max_force}g"
-                f"overload action  reset to default value:'{self.overload_action}'"
+                f"{self.loadcell.name}: Max force reset to default value: {self.max_force}g; "
+                f"overload action reset to default value:'{self.overload_action}'"
             )
         else:
             force = gcmd.get_int('FORCE', self.max_force, 0)
@@ -277,7 +277,7 @@ class LoadCellSensor:
             self.max_force = force
             self.overload_action = overload_action
             gcmd.respond_info(
-                f"{self.name}: Max force changed from {old_force}g to {self.max_force}g; "
+                f"{self.loadcell.name}: Max force changed from {old_force}g to {self.max_force}g; "
                 f"overload action changed from '{old_action}' to '{self.overload_action}'"
             )
 

@@ -273,7 +273,7 @@ class LoadCellSensor:
             old_force = self.max_force
             old_action = self.overload_action
             self.max_force = force
-            self.overload_action = action
+            self.overload_action = overload_action
             gcmd.respond_info(
                 f"{self.name}: Max force changed from {old_force}g to {self.max_force}g; "
                 f"overload action changed from '{old_action}' to '{self.overload_action}'"

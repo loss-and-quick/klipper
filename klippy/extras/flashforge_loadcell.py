@@ -269,7 +269,9 @@ class LoadCellSensor:
             )
         else:
             force = gcmd.get_int('FORCE', self.max_force, 0)
-            overload_action = gcmd.get('ACTION', self.overload_action, lambda x: str(x) if str(x) in ['shutdown', 'pause'] else gcmd.error("Must be 'shutdown' or 'pause'"))
+            overload_action = gcmd.get('ACTION', self.overload_action, lambda x: str(x) if str(x) in ['shutdown', 'pause'] else None)
+            if not isinstance(overload_action, str):
+                raise gcmd.error("Must be 'shutdown' or 'pause'")
             old_force = self.max_force
             old_action = self.overload_action
             self.max_force = force

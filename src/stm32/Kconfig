@@ -253,7 +253,8 @@ config RAM_SIZE
     default 0x9000 if MACH_STM32G07x
     default 0x24000 if MACH_STM32G0Bx
     default 0x20000 if MACH_STM32H7
-    default 0x10000 if MACH_N32G45x
+    default 0x10000 if MACH_N32G45x && !STM32_FLASH_START_10000
+    default 0x20000 if MACH_N32G45x && STM32_FLASH_START_10000
 
 config STACK_SIZE
     int

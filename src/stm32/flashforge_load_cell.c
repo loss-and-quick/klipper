@@ -7,6 +7,8 @@
 #include "sched.h"            // struct task_wake, sched_wake_task, sched_check_wake, DECL_INIT, DECL_TASK, DECL_SHUTDOWN
 #include <stdint.h>           // uint8_t uint16_t uint32_t int32_t size_t
 #include <string.h>           // memset, strncpy, strstr, strcmp, memcpy, strlen
+#include <stdlib.h>           // strtol
+#include <ctype.h>            // isspace, isdigit
 
 #define UARTx UART5
 #define UARTx_IRQn UART5_IRQn
@@ -126,37 +128,28 @@ void LOADCELL_UARTx_IRQHandler(void) {
   }
 }
 
-static int32_t parse_weight_from_response(char *line) {
-  char buf[RXBUF_SIZE];
-  strncpy(buf, line, sizeof(buf));
-  buf[sizeof(buf) - 1] = '\0';
+static int32_t parse_weight_from_response(const char *line) {
+    const char *g_ptr = strstr(line, " g");
+    
+    if (!g_ptr) {
+        return 0;
+    }
 
-  char *saveptr;
-  char *token;
-  token = strtok_r(buf, " ", &saveptr);
-  for (int idx = 0; idx < 4 && token; idx++) {
-    token = strtok_r(NULL, " ", &saveptr);
-  }
-  if (!token) {
-    return 0;
-  }
-  char *p = token;
-  int sign = 1;
-  if (*p == '-') {
-    sign = -1;
-    p++;
-  } else if (*p == '+') {
-    p++;
-  }
-  if (!(*p >= '0' && *p <= '9')) {
-    return 0;
-  }
-  int32_t val = 0;
-  while (*p >= '0' && *p <= '9') {
-    val = val * 10 + (*p - '0');
-    p++;
-  }
-  return sign * val;
+    const char *p = g_ptr - 1;
+
+    while (p >= line && isspace((unsigned char)*p)) {
+        p--;
+    }
+
+    while (p >= line && isdigit((unsigned char)*p)) {
+        p--;
+    }
+
+    if (p < line || (*p != '-' && *p != '+')) {
+        p++;
+    }
+
+    return (int32_t)strtol(p, NULL, 10);
 }
 
 static void process_received_line(void) {

@@ -1,12 +1,12 @@
-#include "autoconf.h"         // Main Klipper configuration
-#include "board/armcm_boot.h" // MCU specific boot functions
-#include "board/irq.h"        // Interrupt handling
-#include "board/misc.h"       // Misc utilities like enable_pclock
-#include "command.h"  // Klipper command declarations (DECL_COMMAND, etc.)
-#include "internal.h" // Klipper internals
-#include "sched.h"    // Klipper scheduler
-#include <stdint.h>   // Standard integer types
-#include <string.h>   // String functions (memset, strncpy, strstr)
+#include "autoconf.h"
+#include "board/armcm_boot.h" // armcm_enable_irq
+#include "board/irq.h"        // irq_disable, irq_enable
+#include "board/misc.h"       // timer_from_us, timer_read_time, timer_is_before
+#include "command.h"          // sendf, command_decode_ptr, DECL_COMMAND 
+#include "internal.h"         // enable_pclock, get_pclock_frequency
+#include "sched.h"            // struct task_wake, sched_wake_task, sched_check_wake, DECL_INIT, DECL_TASK, DECL_SHUTDOWN
+#include <stdint.h>           // uint8_t uint16_t uint32_t int32_t size_t
+#include <string.h>           // memset, strncpy, strstr, strcmp, memcpy, strlen
 
 #define UARTx UART5
 #define UARTx_IRQn UART5_IRQn

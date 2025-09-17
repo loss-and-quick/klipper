@@ -50,9 +50,11 @@ class ExtruderStepper:
     def sync_to_extruder(self, extruder_name):
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.flush_step_generation()
+        motion_queuing = self.printer.lookup_object('motion_queuing')
         if not extruder_name:
             self.stepper.set_trapq(None)
             self.motion_queue = None
+            motion_queuing.check_step_generation_scan_windows()
             return
         extruder = self.printer.lookup_object(extruder_name, None)
         if extruder is None or not isinstance(extruder, PrinterExtruder):
@@ -61,6 +63,7 @@ class ExtruderStepper:
         self.stepper.set_position([extruder.last_position, 0., 0.])
         self.stepper.set_trapq(extruder.get_trapq())
         self.motion_queue = extruder_name
+        motion_queuing.check_step_generation_scan_windows()
     def _set_pressure_advance(self, pressure_advance, smooth_time):
         old_smooth_time = self.pressure_advance_smooth_time
         if not self.pressure_advance:
@@ -75,6 +78,8 @@ class ExtruderStepper:
             # Need full kinematic flush to change the smooth time
             toolhead.flush_step_generation()
             espa(self.sk_extruder, 0., pressure_advance, new_smooth_time)
+            motion_queuing = self.printer.lookup_object('motion_queuing')
+            motion_queuing.check_step_generation_scan_windows()
         else:
             toolhead.register_lookahead_callback(
                 lambda print_time: espa(self.sk_extruder, print_time,

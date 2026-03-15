@@ -19,6 +19,12 @@ WREG_CMD = 0x40
 NOOP_CMD = 0x0
 RESET_STATE = bytearray([0x0, 0x0, 0x0, 0x0])
 
+# ADS1220 MUX value for shorted inputs (V(AVDD)+V(AVSS))/2
+MUX_SHORTED = 0b1110
+
+# Temperature sensor resolution: 0.03125 °C per LSB (14-bit)
+TEMP_RESOLUTION = 0.03125
+
 # turn bytearrays into pretty hex strings: [0xff, 0x1]
 def hexify(byte_array):
     return "[%s]" % (", ".join([hex(b) for b in byte_array]))
@@ -71,6 +77,19 @@ class ADS1220:
             raise config.error("ADS1220 config error: AIN0/REFP1 and AIN3/REFN1"
                                " cant be used as a voltage reference and"
                                " an input at the same time")
+        # Temperature compensation options
+        self.temp_compensation_enabled = config.getboolean(
+            'temperature_compensation', default=False)
+        self.calibration_interval = config.getfloat(
+            'calibration_interval', default=5.0, above=0.5)
+        self.offset_calibration_enabled = config.getboolean(
+            'offset_calibration', default=False)
+        # Temperature compensation state
+        self.chip_temperature = 0.
+        self.offset_counts = 0
+        self.last_calibration_time = 0.
+        self.temperature_callback = None
+        self.min_temp = self.max_temp = 0.
         # SPI Setup
         spi_speed = 512000 if self.is_turbo else 256000
         self.spi = bus.MCU_SPI_from_config(config, 1, default_speed=spi_speed)
@@ -101,6 +120,10 @@ class ADS1220:
                            % (self.oid,), on_restart=True)
         mcu.register_config_callback(self._build_config)
         self.query_ads1220_cmd = None
+        # Register as temperature sensor if compensation enabled
+        if self.temp_compensation_enabled:
+            pheaters = printer.load_object(config, 'heaters')
+            pheaters.register_sensor(config, self)
 
     def setup_trigger_analog(self, trigger_analog_oid):
         self.mcu.add_config_cmd(
@@ -132,19 +155,128 @@ class ADS1220:
     def add_client(self, callback):
         self.batch_bulk.add_client(callback)
 
+    # Temperature sensor interface (for Klipper heaters system)
+    def setup_callback(self, temperature_callback):
+        self.temperature_callback = temperature_callback
+
+    def setup_minmax(self, min_temp, max_temp):
+        self.min_temp = min_temp
+        self.max_temp = max_temp
+
+    def get_report_time_delta(self):
+        return self.calibration_interval
+
+    def get_temp(self, eventtime):
+        return self.chip_temperature, 0.
+
+    def get_status(self, eventtime):
+        return {'temperature': round(self.chip_temperature, 2)}
+
     # Measurement decoding
     def _convert_samples(self, samples):
         adc_factor = 1. / (1 << 23)
+        offset = self.offset_counts
         count = 0
         for ptime, val in samples:
-            samples[count] = (round(ptime, 6), val, round(val * adc_factor, 9))
+            corrected = val - offset
+            samples[count] = (round(ptime, 6), corrected,
+                              round(corrected * adc_factor, 9))
             count += 1
         del samples[count:]
+
+    # Read a single 24-bit conversion result from the ADC
+    def _read_adc_value(self):
+        # Send 3 NOP bytes and read back 3 data bytes
+        params = self.spi.spi_transfer([NOOP_CMD, NOOP_CMD, NOOP_CMD])
+        response = bytearray(params['response'])
+        counts = (response[0] << 16) | (response[1] << 8) | response[2]
+        # Sign-extend 24-bit to 32-bit
+        if counts & 0x800000:
+            counts -= 0x1000000
+        return counts
+
+    # Build register 0 value
+    def _build_reg0(self, mux=None):
+        if mux is None:
+            mux = self.mux
+        return (mux << 4) | (self.gain << 1) | int(self.pga_bypass)
+
+    # Build register 1 value
+    def _build_reg1(self, temp_sensor=False):
+        continuous = 0x1
+        mode = 0x2 if self.is_turbo else 0x0
+        sps_list = self.sps_turbo if self.is_turbo else self.sps_normal
+        data_rate = list(sps_list.keys()).index(str(self.sps))
+        ts_bit = 0x1 if temp_sensor else 0x0
+        return (data_rate << 5) | (mode << 3) | (continuous << 2) | (ts_bit << 1)
+
+    # Read the ADS1220 internal temperature sensor
+    def _read_chip_temperature(self):
+        # Set TS=1 in register 1 to enable temperature sensor mode
+        self.write_reg(0x1, [self._build_reg1(temp_sensor=True)])
+        # Start a single-shot conversion
+        self.send_command(START_SYNC_CMD)
+        # Wait for conversion to complete
+        reactor = self.printer.get_reactor()
+        reactor.pause(reactor.monotonic() + 1. / self.sps + 0.002)
+        # Read the 24-bit result
+        raw = self._read_adc_value()
+        # Restore normal mode (TS=0)
+        self.write_reg(0x1, [self._build_reg1(temp_sensor=False)])
+        # Convert: 14-bit value is left-aligned in 24-bit word
+        # Shift right by 10 to get the signed 14-bit temperature code
+        temp_code = raw >> 10
+        return temp_code * TEMP_RESOLUTION
+
+    # Read the ADC offset by shorting inputs internally
+    def _read_offset(self):
+        # Set MUX to shorted inputs: (V(AVDD) + V(AVSS)) / 2
+        self.write_reg(0x0, [self._build_reg0(mux=MUX_SHORTED)])
+        # Start a single-shot conversion
+        self.send_command(START_SYNC_CMD)
+        # Wait for conversion to complete
+        reactor = self.printer.get_reactor()
+        reactor.pause(reactor.monotonic() + 1. / self.sps + 0.002)
+        # Read the offset value
+        offset = self._read_adc_value()
+        # Restore original MUX setting
+        self.write_reg(0x0, [self._build_reg0()])
+        return offset
+
+    # Perform a calibration cycle: read temperature and optionally offset
+    def _do_calibration_cycle(self):
+        # Stop the MCU-side streaming
+        self.query_ads1220_cmd.send([self.oid, 0])
+        self.ffreader.note_end()
+        try:
+            # Read chip temperature
+            self.chip_temperature = self._read_chip_temperature()
+            logging.info("ADS1220 '%s' chip temperature: %.2f C",
+                         self.name, self.chip_temperature)
+            # Optionally read offset
+            if self.offset_calibration_enabled:
+                self.offset_counts = self._read_offset()
+                logging.info("ADS1220 '%s' offset: %d counts",
+                             self.name, self.offset_counts)
+            # Fire temperature callback for heaters system
+            if self.temperature_callback is not None:
+                mcu_clock = self.mcu.estimated_print_time(
+                    self.printer.get_reactor().monotonic())
+                self.temperature_callback(mcu_clock, self.chip_temperature)
+        except self.printer.command_error as e:
+            logging.exception("ADS1220 '%s' calibration cycle error", self.name)
+        # Restore full chip configuration and restart streaming
+        self.setup_chip()
+        rest_ticks = self.mcu.seconds_to_clock(1. / (10. * self.sps))
+        self.query_ads1220_cmd.send([self.oid, rest_ticks])
+        self.ffreader.note_start()
+        self.last_calibration_time = self.printer.get_reactor().monotonic()
 
     # Start, stop, and process message batches
     def _start_measurements(self):
         self.last_error_count = 0
         self.consecutive_fails = 0
+        self.last_calibration_time = self.printer.get_reactor().monotonic()
         # Start bulk reading
         self.reset_chip()
         self.setup_chip()
@@ -164,6 +296,11 @@ class ADS1220:
         logging.info("ADS1220 finished '%s' measurements", self.name)
 
     def _process_batch(self, eventtime):
+        # Run calibration cycle if interval has elapsed
+        if (self.temp_compensation_enabled
+                and eventtime - self.last_calibration_time
+                    >= self.calibration_interval):
+            self._do_calibration_cycle()
         samples = self.ffreader.pull_samples()
         self._convert_samples(samples)
         return {'data': samples, 'errors': self.last_error_count,
@@ -184,12 +321,8 @@ class ADS1220:
                 % (hexify(val), hexify(RESET_STATE)))
 
     def setup_chip(self):
-        continuous = 0x1  # enable continuous conversions
-        mode = 0x2 if self.is_turbo else 0x0  # turbo mode
-        sps_list = self.sps_turbo if self.is_turbo else self.sps_normal
-        data_rate = list(sps_list.keys()).index(str(self.sps))
-        reg_values = [(self.mux << 4) | (self.gain << 1) | int(self.pga_bypass),
-                      (data_rate << 5) | (mode << 3) | (continuous << 2),
+        reg_values = [self._build_reg0(),
+                      self._build_reg1(),
                       (self.vref << 6),
                       0x0]
         self.write_reg(0x0, reg_values)

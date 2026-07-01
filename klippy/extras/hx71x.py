@@ -23,19 +23,34 @@ class HX71xBase:
         self.last_error_count = 0
         self.consecutive_fails = 0
         self.sensor_type = sensor_type
-        # Chip options
-        dout_pin_name = config.get('dout_pin')
-        sclk_pin_name = config.get('sclk_pin')
+        # Chip pins - a single dout_pin/sclk_pin, or dout_pins/sclk_pins lists
+        # to sum several chips (e.g. one load cell per bed mount) into one
+        # signal.  The summed force is independent of the XY contact point.
         ppins = printer.lookup_object('pins')
-        dout_ppin = ppins.lookup_pin(dout_pin_name)
-        sclk_ppin = ppins.lookup_pin(sclk_pin_name)
-        self.mcu = mcu = dout_ppin['chip']
+        if config.get('dout_pins', None) is not None:
+            dout_pin_names = config.getlist('dout_pins')
+            sclk_pin_names = config.getlist('sclk_pins')
+        else:
+            dout_pin_names = [config.get('dout_pin')]
+            sclk_pin_names = [config.get('sclk_pin')]
+        if len(dout_pin_names) != len(sclk_pin_names):
+            raise config.error("%s config error: dout_pins and sclk_pins must "
+                               "list the same number of pins" % (self.name,))
+        self.chip_count = len(dout_pin_names)
+        self.mcu = mcu = None
+        self.dout_pins = []
+        self.sclk_pins = []
+        for dout_pin_name, sclk_pin_name in zip(dout_pin_names, sclk_pin_names):
+            dout_ppin = ppins.lookup_pin(dout_pin_name)
+            sclk_ppin = ppins.lookup_pin(sclk_pin_name)
+            if self.mcu is None:
+                self.mcu = mcu = dout_ppin['chip']
+            if dout_ppin['chip'] is not mcu or sclk_ppin['chip'] is not mcu:
+                raise config.error("%s config error: All pins must be "
+                                   "connected to the same MCU" % (self.name,))
+            self.dout_pins.append(dout_ppin['pin'])
+            self.sclk_pins.append(sclk_ppin['pin'])
         self.oid = mcu.create_oid()
-        if sclk_ppin['chip'] is not mcu:
-            raise config.error("%s config error: All pins must be "
-                               "connected to the same MCU" % (self.name,))
-        self.dout_pin = dout_ppin['pin']
-        self.sclk_pin = sclk_ppin['pin']
         # Samples per second choices
         self.sps = config.getchoice('sample_rate', sample_rate_options,
                                     default=default_sample_rate)
@@ -52,8 +67,12 @@ class HX71xBase:
         # Command Configuration
         self.query_hx71x_cmd = None
         mcu.add_config_cmd(
-            "config_hx71x oid=%d gain_channel=%d dout_pin=%s sclk_pin=%s"
-            % (self.oid, self.gain_channel, self.dout_pin, self.sclk_pin))
+            "config_hx71x oid=%d gain_channel=%d chip_count=%d"
+            % (self.oid, self.gain_channel, self.chip_count))
+        for i in range(self.chip_count):
+            mcu.add_config_cmd(
+                "add_hx71x oid=%d index=%d dout_pin=%s sclk_pin=%s"
+                % (self.oid, i, self.dout_pins[i], self.sclk_pins[i]))
         mcu.add_config_cmd("query_hx71x oid=%d rest_ticks=0"
                            % (self.oid,), on_restart=True)
 
@@ -91,7 +110,7 @@ class HX71xBase:
     # returns a tuple of the minimum and maximum value of the sensor, used to
     # detect if a data value is saturated
     def get_range(self):
-        return -0x800000, 0x7FFFFF
+        return -0x800000 * self.chip_count, 0x7FFFFF * self.chip_count
 
     # add_client interface, direct pass through to bulk_sensor API
     def add_client(self, callback):
@@ -99,7 +118,7 @@ class HX71xBase:
 
     # Measurement decoding
     def _convert_samples(self, samples):
-        adc_factor = 1. / (1 << 23)
+        adc_factor = 1. / (self.chip_count << 23)
         count = 0
         for ptime, val in samples:
             if val == SAMPLE_ERROR_DESYNC or val == SAMPLE_ERROR_LONG_READ:

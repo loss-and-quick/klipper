@@ -16,16 +16,26 @@
 #include "sensor_bulk.h" // sensor_bulk_report
 #include "trigger_analog.h" // trigger_analog_update
 
+// A single bit-banged HX711/HX717 chip
+struct hx71x_chip {
+    struct gpio_in dout; // pin used to receive data from the hx71x
+    struct gpio_out sclk; // pin used to generate clock for the hx71x
+};
+
+// A group of 1..N chips reported as the sum of their (signed) readings.  A
+// single chip is the common case; several chips are summed for printers that
+// place one load cell under each bed mount, where the useful signal is the
+// total force and does not depend on the XY position of the contact point.
 struct hx71x_adc {
     struct timer timer;
     uint8_t gain_channel;   // the gain+channel selection (1-4)
+    uint8_t chip_count;     // number of chips summed together
     uint8_t flags;
     uint32_t rest_ticks;
     uint32_t last_error;
-    struct gpio_in dout; // pin used to receive data from the hx71x
-    struct gpio_out sclk; // pin used to generate clock for the hx71x
     struct sensor_bulk sb;
     struct trigger_analog *ta;
+    struct hx71x_chip chips[]; // per-chip pins, sized via oid_alloc
 };
 
 enum {
@@ -100,11 +110,14 @@ hx71x_raw_read(struct gpio_in dout, struct gpio_out sclk, int num_bits)
  * HX711 and HX717 Sensor Support
  ****************************************************************/
 
-// Check if data is ready
+// Check if data is ready (all chips have pulled DOUT low)
 static uint_fast8_t
 hx71x_is_data_ready(struct hx71x_adc *hx71x)
 {
-    return !gpio_in_read(hx71x->dout);
+    for (uint8_t i = 0; i < hx71x->chip_count; i++)
+        if (gpio_in_read(hx71x->chips[i].dout))
+            return 0;
+    return 1;
 }
 
 // Event handler that wakes wake_hx71x() periodically
@@ -143,13 +156,27 @@ add_sample(struct hx71x_adc *hx71x, uint8_t oid, uint32_t counts,
         sensor_bulk_report(&hx71x->sb, oid);
 }
 
-// hx71x ADC query
+// hx71x ADC query - read every chip and report the sum of the counts
 static void
 hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
 {
-    // Read from sensor
     uint_fast8_t gain_channel = hx71x->gain_channel;
-    uint32_t adc = hx71x_raw_read(hx71x->dout, hx71x->sclk, 24 + gain_channel);
+    uint_fast8_t extras_mask = (1 << gain_channel) - 1;
+    int32_t sum = 0;
+    uint8_t desync = 0;
+    for (uint8_t i = 0; i < hx71x->chip_count; i++) {
+        // Read from sensor
+        uint32_t adc = hx71x_raw_read(hx71x->chips[i].dout,
+                                      hx71x->chips[i].sclk, 24 + gain_channel);
+        // Extract signed 24bit report from raw data
+        uint32_t counts = adc >> gain_channel;
+        if (counts & 0x800000)
+            counts |= 0xFF000000;
+        // The extra gain/channel clocks must read back high
+        if ((adc & extras_mask) != extras_mask)
+            desync = 1; // Transfer did not complete correctly
+        sum += (int32_t)counts;
+    }
 
     // Clear pending flag (and note if an overflow occurred)
     irq_disable();
@@ -157,52 +184,60 @@ hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
     hx71x->flags = 0;
     irq_enable();
 
-    // Extract report from raw data
-    uint32_t counts = adc >> gain_channel;
-    if (counts & 0x800000)
-        counts |= 0xFF000000;
-
     // Check for errors
-    uint_fast8_t extras_mask = (1 << gain_channel) - 1;
-    if ((adc & extras_mask) != extras_mask) {
-        // Transfer did not complete correctly
+    if (desync)
         hx71x->last_error = SAMPLE_ERROR_DESYNC;
-    } else if (flags & HX_OVERFLOW) {
-        // Transfer took too long
-        hx71x->last_error = SAMPLE_ERROR_READ_TOO_LONG;
-    }
+    else if (flags & HX_OVERFLOW)
+        hx71x->last_error = SAMPLE_ERROR_READ_TOO_LONG; // Transfer took too long
 
     // forever send errors until reset
+    uint32_t counts = (uint32_t)sum;
     if (hx71x->last_error != 0) {
         counts = hx71x->last_error;
-    }
-
-    // probe is optional, report if enabled
-    if (hx71x->last_error == 0) {
-        trigger_analog_update(hx71x->ta, counts);
+    } else {
+        // probe is optional, report if enabled
+        trigger_analog_update(hx71x->ta, sum);
     }
 
     // Add measurement to buffer
     add_sample(hx71x, oid, counts, false);
 }
 
-// Create a hx71x sensor
+// Create a hx71x sensor made up of 'chip_count' summed chips
 void
 command_config_hx71x(uint32_t *args)
 {
-    struct hx71x_adc *hx71x = oid_alloc(args[0]
-                , command_config_hx71x, sizeof(*hx71x));
-    hx71x->timer.func = hx71x_event;
     uint8_t gain_channel = args[1];
     if (gain_channel < 1 || gain_channel > 4) {
         shutdown("HX71x gain/channel out of range 1-4");
     }
+    uint8_t chip_count = args[2];
+    if (chip_count < 1) {
+        shutdown("HX71x requires at least one chip");
+    }
+    struct hx71x_adc *hx71x = oid_alloc(args[0], command_config_hx71x
+                , sizeof(*hx71x) + chip_count * sizeof(hx71x->chips[0]));
+    hx71x->timer.func = hx71x_event;
     hx71x->gain_channel = gain_channel;
-    hx71x->dout = gpio_in_setup(args[2], 1);
-    hx71x->sclk = gpio_out_setup(args[3], 0);
-    gpio_out_write(hx71x->sclk, 1); // put chip in power down state
+    hx71x->chip_count = chip_count;
 }
 DECL_COMMAND(command_config_hx71x, "config_hx71x oid=%c gain_channel=%c"
+             " chip_count=%c");
+
+// Assign the pins of one of the summed chips
+void
+command_add_hx71x(uint32_t *args)
+{
+    struct hx71x_adc *hx71x = oid_lookup(args[0], command_config_hx71x);
+    uint8_t index = args[1];
+    if (index >= hx71x->chip_count) {
+        shutdown("HX71x chip index out of range");
+    }
+    hx71x->chips[index].dout = gpio_in_setup(args[2], 1);
+    hx71x->chips[index].sclk = gpio_out_setup(args[3], 0);
+    gpio_out_write(hx71x->chips[index].sclk, 1); // put chip in power down state
+}
+DECL_COMMAND(command_add_hx71x, "add_hx71x oid=%c index=%c"
              " dout_pin=%u sclk_pin=%u");
 
 void
@@ -228,11 +263,13 @@ command_query_hx71x(uint32_t *args)
     hx71x->rest_ticks = args[1];
     if (!hx71x->rest_ticks) {
         // End measurements
-        gpio_out_write(hx71x->sclk, 1); // put chip in power down state
+        for (uint8_t i = 0; i < hx71x->chip_count; i++)
+            gpio_out_write(hx71x->chips[i].sclk, 1); // power down state
         return;
     }
     // Start new measurements
-    gpio_out_write(hx71x->sclk, 0); // wake chip from power down
+    for (uint8_t i = 0; i < hx71x->chip_count; i++)
+        gpio_out_write(hx71x->chips[i].sclk, 0); // wake chip from power down
     sensor_bulk_reset(&hx71x->sb);
     irq_disable();
     hx71x->timer.waketime = timer_read_time() + hx71x->rest_ticks;

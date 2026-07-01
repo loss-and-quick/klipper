@@ -24,6 +24,13 @@ SECTIONS
         _text_vectortable_end = .;
         *(.text .text.*)
         *(.rodata .rodata*)
+        // Keep the ARM exception index table: some libgcc helpers
+        // reference __exidx_start/__exidx_end even though the firmware
+        // never performs stack unwinding.
+        . = ALIGN(4);
+        __exidx_start = .;
+        *(.ARM.exidx*)
+        __exidx_end = .;
     } > rom
 
     . = ALIGN(4);
@@ -69,8 +76,8 @@ SECTIONS
         // that isn't needed so no need to include them in the binary.
         *(.init)
         *(.fini)
-        // Don't include exception tables
+        // Don't include the C++ exception unwind tables (.ARM.exidx is
+        // kept in the .text region above)
         *(.ARM.extab)
-        *(.ARM.exidx)
     }
 }

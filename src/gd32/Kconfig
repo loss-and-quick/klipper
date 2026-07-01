@@ -18,6 +18,10 @@ config BOARD_DIRECTORY
     string
     default "gd32"
 
+config MCU_MENU
+    string
+    default "G"
+
 choice
     prompt "Processor model"
     config MACH_GD32F303XB

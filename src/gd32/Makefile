@@ -25,6 +25,22 @@ CFLAGS-$(CONFIG_MACH_GD32E23X) += -mcpu=cortex-m23 -Ilib/gd32e23x
 CFLAGS-$(CONFIG_MACH_GD32F30X) += -mcpu=cortex-m4 -Ilib/gd32f30x
 CFLAGS += $(CFLAGS-y) -D$(MCU_UPPER) -mthumb -Ilib/cmsis-core
 
+# Creality-specific on-board loader header (for the factory MCU update path)
+ifeq ($(CONFIG_BOARD_INFO_CONFIGURE),y)
+ifeq ($(CONFIG_MAIN_MCU_BOARD),y)
+board_type := mcu
+else ifeq ($(CONFIG_NOZZLE_MCU_BOARD),y)
+board_type := noz
+else ifeq ($(CONFIG_BED_MCU_BOARD),y)
+board_type := bed
+endif
+mcu_menu := $(patsubst "%",%,$(CONFIG_MCU_MENU))
+mcu_type := $(patsubst "%",%,$(CONFIG_MCU_TYPE))
+board_hw_version := $(board_type)$(CONFIG_MCU_BOARD_ID)_$(CONFIG_MCU_BOARD_HW_VER)_$(mcu_menu)$(mcu_type)
+board_fw_version := $(board_type)$(CONFIG_MCU_BOARD_ID)_$(CONFIG_MCU_BOARD_FW_VER)_$(CONFIG_MCU_BOARD_FW_RESERVED)
+CFLAGS += -DBOARD_FW_VERSION=\"$(board_fw_version)\"
+endif
+
 CFLAGS_klipper.elf += --specs=nano.specs --specs=nosys.specs
 CFLAGS_klipper.elf += -T $(OUT)src/generic/armcm_link.ld
 $(OUT)klipper.elf: $(OUT)src/generic/armcm_link.ld
@@ -46,6 +62,7 @@ src-$(CONFIG_USBSERIAL) += gd32/usbserial.c
 src-$(CONFIG_USBSERIAL) += generic/usb_cdc.c
 src-$(CONFIG_SERIAL) += gd32/serial.c generic/serial_irq.c
 src-$(CONFIG_HAVE_GPIO_HARD_PWM) += $(pwm-src-y)
+src-$(CONFIG_BOARD_INFO_CONFIGURE) += gd32/board_info.c
 
 # Binary output file rules
 target-y += $(OUT)klipper.bin
@@ -53,6 +70,18 @@ target-y += $(OUT)klipper.bin
 $(OUT)klipper.bin: $(OUT)klipper.elf
 	@echo "  Creating bin file $@"
 	$(Q)$(OBJCOPY) -O binary $< $@
+ifeq ($(CONFIG_BOARD_INFO_CONFIGURE),y)
+	$(Q)$(PYTHON) ./scripts/gd32_board_crc16.py $@
+endif
+
+ifeq ($(CONFIG_BOARD_INFO_CONFIGURE),y)
+# Emit a copy named like the Creality factory image so it can be flashed
+# through the on-board MCU update path.
+target-y += $(OUT)$(board_hw_version)-$(board_fw_version).bin
+$(OUT)$(board_hw_version)-$(board_fw_version).bin: $(OUT)klipper.bin
+	@echo "  Naming firmware $@"
+	$(Q)cp $< $@
+endif
 
 # Flash rules
 flash: $(OUT)klipper.bin

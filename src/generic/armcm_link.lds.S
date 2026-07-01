@@ -22,6 +22,13 @@ SECTIONS
         _text_vectortable_start = .;
         KEEP(*(.vector_table))
         _text_vectortable_end = .;
+#if CONFIG_BOARD_INFO_CONFIGURE
+        // Creality-specific: reserve the on-board loader header at a fixed
+        // offset (0x200) after the vector table; scripts/gd32_board_crc16.py
+        // fills in its CRC16 and image length.
+        . = _text_vectortable_start + 0x200;
+        KEEP(*(SV_SECTION))
+#endif
         *(.text .text.*)
         *(.rodata .rodata*)
         // Keep the ARM exception index table: some libgcc helpers

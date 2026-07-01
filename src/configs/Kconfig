@@ -1,0 +1,43 @@
+# Creality-specific board loader header options.  When enabled the build
+# emits the version string plus a CRC16 and image length expected by the
+# factory on-board MCU updater, so firmware can be flashed over UART through
+# the stock update path instead of an external programmer.
+
+config BOARD_INFO_CONFIGURE
+    bool "Creality board loader header"
+    depends on MACH_STM32 || MACH_GD32
+    default n
+    help
+        Emit the Creality on-board loader header (version string plus a
+        CRC16 and length) so the firmware can be flashed through the
+        factory MCU update path over UART instead of an external programmer.
+
+menu "Board Configure"
+    depends on BOARD_INFO_CONFIGURE
+    choice
+    prompt "Board Type"
+        config MAIN_MCU_BOARD
+            bool "Main MCU"
+        config NOZZLE_MCU_BOARD
+            bool "Nozzle MCU"
+        config BED_MCU_BOARD
+            bool "Bed MCU"
+    endchoice
+
+    config MCU_BOARD_ID
+        int "MCU Board ID"
+        default 0
+
+    config MCU_BOARD_HW_VER
+        int "HW Version"
+        default 000
+
+    config MCU_BOARD_FW_VER
+        int "FW Version"
+        default 000
+
+    config MCU_BOARD_FW_RESERVED
+        int "FW Reserved"
+        default 000
+
+endmenu

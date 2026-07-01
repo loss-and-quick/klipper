@@ -48,6 +48,7 @@ source "src/pru/Kconfig"
 source "src/ar100/Kconfig"
 source "src/linux/Kconfig"
 source "src/simulator/Kconfig"
+source "src/configs/Kconfig"
 
 # Generic configuration options for serial ports
 config SERIAL

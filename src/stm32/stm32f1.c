@@ -17,7 +17,24 @@
  * Clock setup
  ****************************************************************/
 
-#define FREQ_PERIPH (CONFIG_CLOCK_FREQ / 2)
+#if CONFIG_MACH_N32G45x
+// The n32g45x runs the AHB bus at up to 144Mhz, but PCLK2 is limited to
+// 72Mhz and PCLK1 to 36Mhz
+#define FREQ_APB2 (CONFIG_CLOCK_FREQ > 72000000                         \
+                   ? CONFIG_CLOCK_FREQ / 2 : CONFIG_CLOCK_FREQ)
+#define FREQ_APB1 (CONFIG_CLOCK_FREQ > 72000000                         \
+                   ? CONFIG_CLOCK_FREQ / 4                              \
+                   : (CONFIG_CLOCK_FREQ > 36000000                      \
+                      ? CONFIG_CLOCK_FREQ / 2 : CONFIG_CLOCK_FREQ))
+// The n32g45x PLL multiplier is five bits wide (bit 27 is PLLMUL[4])
+#define PLLMUL_MAX 32
+#define PLLMUL_HIGH_BIT (1 << 27)
+#else
+#define FREQ_APB2 (CONFIG_CLOCK_FREQ / 2)
+#define FREQ_APB1 (CONFIG_CLOCK_FREQ / 2)
+#define PLLMUL_MAX 16
+#define PLLMUL_HIGH_BIT 0
+#endif
 
 // Map a peripheral address to its enable bits
 struct cline
@@ -39,7 +56,9 @@ lookup_clock_line(uint32_t periph_base)
 uint32_t
 get_pclock_frequency(uint32_t periph_base)
 {
-    return FREQ_PERIPH;
+    if (periph_base < APB2PERIPH_BASE)
+        return FREQ_APB1;
+    return FREQ_APB2;
 }
 
 // Enable a GPIO peripheral clock
@@ -53,6 +72,26 @@ gpio_clock_enable(GPIO_TypeDef *regs)
 
 // PLL (f103) input: 1 to 25Mhz, output: 16 to 72Mhz
 
+// Return the RCC_CFGR bits that select the given PLL multiplier
+static uint32_t
+pll_multiplier_bits(uint32_t mul)
+{
+    if (PLLMUL_HIGH_BIT && mul > 16)
+        // Multipliers above 16 are encoded with PLLMUL[4] set
+        return ((mul - 17) << RCC_CFGR_PLLMULL_Pos) | PLLMUL_HIGH_BIT;
+    return (mul - 2) << RCC_CFGR_PLLMULL_Pos;
+}
+
+// Return the flash wait states needed at the current system clock rate
+static uint32_t
+flash_latency(void)
+{
+    if (CONFIG_MACH_N32G45x)
+        // 0: <=32Mhz, 1: <=64Mhz, 2: <=96Mhz, 3: <=128Mhz, 4: <=144Mhz
+        return (CONFIG_CLOCK_FREQ - 1) / 32000000;
+    return 2;
+}
+
 // Main clock setup called at chip startup
 static void
 clock_setup(void)
@@ -64,23 +103,33 @@ clock_setup(void)
         RCC->CR |= RCC_CR_HSEON;
         uint32_t div = CONFIG_CLOCK_FREQ / (CONFIG_CLOCK_REF_FREQ / 2);
         cfgr = 1 << RCC_CFGR_PLLSRC_Pos;
-        if ((div & 1) && div <= 16)
+        if ((div & 1) && div <= PLLMUL_MAX)
             cfgr |= RCC_CFGR_PLLXTPRE_HSE_DIV2;
         else
             div /= 2;
-        cfgr |= (div - 2) << RCC_CFGR_PLLMULL_Pos;
+        cfgr |= pll_multiplier_bits(div);
     } else {
         // Configure 72Mhz PLL from internal 8Mhz oscillator (HSI)
         uint32_t div2 = (CONFIG_CLOCK_FREQ / 8000000) * 2;
-        cfgr = ((0 << RCC_CFGR_PLLSRC_Pos)
-                | ((div2 - 2) << RCC_CFGR_PLLMULL_Pos));
+        cfgr = (0 << RCC_CFGR_PLLSRC_Pos) | pll_multiplier_bits(div2);
     }
-    cfgr |= RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_ADCPRE_DIV8;
+    if (CONFIG_MACH_N32G45x) {
+        // Keep PCLK2 <= 72Mhz and PCLK1 <= 36Mhz (RCC_CFGR bits 15:14 are
+        // reserved on the n32g45x - the adc clock is configured separately
+        // in n32g45x_adc.c via RCC_CFG2)
+        if (CONFIG_CLOCK_FREQ > 72000000)
+            cfgr |= RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_PPRE1_DIV4;
+        else if (CONFIG_CLOCK_FREQ > 36000000)
+            cfgr |= RCC_CFGR_PPRE1_DIV2;
+    } else {
+        cfgr |= (RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2
+                 | RCC_CFGR_ADCPRE_DIV8);
+    }
     RCC->CFGR = cfgr;
     RCC->CR |= RCC_CR_PLLON;
 
     // Set flash latency
-    FLASH->ACR = (2 << FLASH_ACR_LATENCY_Pos) | FLASH_ACR_PRFTBE;
+    FLASH->ACR = (flash_latency() << FLASH_ACR_LATENCY_Pos) | FLASH_ACR_PRFTBE;
 
     // Wait for PLL lock
     while (!(RCC->CR & RCC_CR_PLLRDY))

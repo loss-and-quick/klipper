@@ -29,11 +29,27 @@
 // The n32g45x PLL multiplier is five bits wide (bit 27 is PLLMUL[4])
 #define PLLMUL_MAX 32
 #define PLLMUL_HIGH_BIT (1 << 27)
+// The n32g45x usb clock is PLLCLK divided by 1.5, 1, 2 or 3
+#if CONFIG_CLOCK_FREQ == 72000000
+  #define USBPRE_BITS (0 << 22)
+#elif CONFIG_CLOCK_FREQ == 48000000
+  #define USBPRE_BITS (1 << 22)
+#elif CONFIG_CLOCK_FREQ == 96000000
+  #define USBPRE_BITS (2 << 22)
+#elif CONFIG_CLOCK_FREQ == 144000000
+  #define USBPRE_BITS (3 << 22)
+#else
+  #if CONFIG_USB
+    #error "Unable to generate a 48Mhz usb clock at this system clock rate"
+  #endif
+  #define USBPRE_BITS 0
+#endif
 #else
 #define FREQ_APB2 (CONFIG_CLOCK_FREQ / 2)
 #define FREQ_APB1 (CONFIG_CLOCK_FREQ / 2)
 #define PLLMUL_MAX 16
 #define PLLMUL_HIGH_BIT 0
+#define USBPRE_BITS 0
 #endif
 
 // Map a peripheral address to its enable bits
@@ -121,6 +137,7 @@ clock_setup(void)
             cfgr |= RCC_CFGR_PPRE2_DIV2 | RCC_CFGR_PPRE1_DIV4;
         else if (CONFIG_CLOCK_FREQ > 36000000)
             cfgr |= RCC_CFGR_PPRE1_DIV2;
+        cfgr |= USBPRE_BITS;
     } else {
         cfgr |= (RCC_CFGR_PPRE1_DIV2 | RCC_CFGR_PPRE2_DIV2
                  | RCC_CFGR_ADCPRE_DIV8);

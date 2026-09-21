@@ -49,8 +49,9 @@ class Fan:
     def get_mcu(self):
         return self.mcu_fan.get_mcu()
     def _apply_speed(self, print_time, value):
+        req_value = value
         if value < self.off_below:
-            value = 0.
+            req_value = value = 0.
         if value:
             # Scale the request onto the range the fan actually runs in
             value = self.min_power + value * (self.max_power - self.min_power)
@@ -65,11 +66,12 @@ class Fan:
         if (value and self.kick_start_time
             and (not self.last_fan_value or value - self.last_fan_value > .5)):
             # Run fan at full speed for specified kick_start_time
-            self.last_req_value = value
+            self.last_req_value = req_value
             self.last_fan_value = self.max_power
             self.mcu_fan.set_pwm(print_time, self.max_power)
             return "repeat", print_time + self.kick_start_time
-        self.last_fan_value = self.last_req_value = value
+        self.last_req_value = req_value
+        self.last_fan_value = value
         self.mcu_fan.set_pwm(print_time, value)
     def set_speed(self, value, print_time=None):
         self.gcrq.send_async_request(value, print_time)

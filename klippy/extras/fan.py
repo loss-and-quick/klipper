@@ -11,6 +11,8 @@ class Fan:
         self.last_fan_value = self.last_req_value = 0.
         # Read config
         self.max_power = config.getfloat('max_power', 1., above=0., maxval=1.)
+        self.min_power = config.getfloat('min_power', 0., minval=0.,
+                                         maxval=self.max_power)
         self.kick_start_time = config.getfloat('kick_start_time', 0.1,
                                                minval=0.)
         self.off_below = config.getfloat('off_below', default=0.,
@@ -49,7 +51,10 @@ class Fan:
     def _apply_speed(self, print_time, value):
         if value < self.off_below:
             value = 0.
-        value = max(0., min(self.max_power, value * self.max_power))
+        if value:
+            # Scale the request onto the range the fan actually runs in
+            value = self.min_power + value * (self.max_power - self.min_power)
+        value = max(0., min(self.max_power, value))
         if value == self.last_fan_value:
             return "discard", 0.
         if self.enable_pin:
@@ -70,12 +75,13 @@ class Fan:
         self.gcrq.send_async_request(value, print_time)
     def set_speed_from_command(self, value):
         self.gcrq.queue_gcode_request(value)
-    def set_startup_params(self, off_below, kick_start_time):
-        # Allow calibration tools to temporarily alter the startup
-        # behavior; returns the previous settings
-        prev = (self.off_below, self.kick_start_time)
+    def set_speed_params(self, off_below, kick_start_time, min_power):
+        # Allow calibration tools to temporarily neutralize the settings
+        # that shape a speed request; returns the previous settings
+        prev = (self.off_below, self.kick_start_time, self.min_power)
         self.off_below = off_below
         self.kick_start_time = kick_start_time
+        self.min_power = min_power
         return prev
     def _handle_request_restart(self, print_time):
         self.set_speed(0., print_time)

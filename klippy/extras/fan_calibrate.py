@@ -70,8 +70,9 @@ class FanCalibrate:
         initial_speed = fan.get_status(reactor.monotonic())['speed']
         # The calibration must not be influenced by the very settings it
         # measures - a previously saved off_below would clamp the low
-        # speeds to zero and the result could only ever confirm itself.
-        saved_params = fan.set_startup_params(0., 0.)
+        # speeds to zero and min_power would scale them away, so the
+        # result could only ever confirm the previous one.
+        saved_params = fan.set_speed_params(0., 0., 0.)
         try:
             max_rpm, off_below, kick_start = self._run(gcmd, fan)
         finally:
@@ -94,7 +95,7 @@ class FanCalibrate:
     def _restore(self, fan, saved_params, initial_speed):
         # Never let a restore failure mask the original error
         try:
-            fan.set_startup_params(*saved_params)
+            fan.set_speed_params(*saved_params)
             fan.set_speed(initial_speed)
         except Exception:
             logging.exception("FAN_CALIBRATE: unable to restore fan state")
@@ -192,7 +193,7 @@ class FanCalibrate:
         # matches what kick_start_time will do in normal operation.
         fan.set_speed(0.)
         self._pause(COAST_TIME)
-        fan.set_startup_params(0., kick_start_time)
+        fan.set_speed_params(0., kick_start_time, 0.)
         fan.set_speed(duty)
         return self._wait_stable_rpm(fan) >= self.rpm_threshold * max_rpm
     def _find_kick_start(self, gcmd, fan, max_rpm, off_below):

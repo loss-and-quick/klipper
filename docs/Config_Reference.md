@@ -3232,6 +3232,19 @@ pin:
 #   will be scaled between zero and max_power (for example, if
 #   max_power is .9 and a fan speed of 80% is requested then the fan
 #   power will be set to 72%). The default is 1.0.
+#min_power: 0.0
+#   The power (expressed as a value from 0.0 to 1.0) the fan is given
+#   for the smallest non-zero speed request. Fan speed requests are
+#   scaled between min_power and max_power, so a request of zero still
+#   stops the fan while the smallest non-zero request produces a speed
+#   the fan can actually sustain. This is useful on fans that stall at
+#   low power: without it, every speed below that point is either
+#   ignored or turned into a stall. Set it to the lowest power that
+#   reliably keeps the fan spinning, which is what the FAN_CALIBRATE
+#   command reports as off_below. Note that off_below is applied to the
+#   requested speed before this scaling, so it still decides which
+#   requests turn the fan off entirely. The default is 0.0, which
+#   leaves the speed request unscaled.
 #shutdown_speed: 0
 #   The desired fan speed (expressed as a value from 0.0 to 1.0) if
 #   the micro-controller software enters an error state. The default
@@ -3306,6 +3319,7 @@ a shutdown_speed equal to max_power.
 [heater_fan heatbreak_cooling_fan]
 #pin:
 #max_power:
+#min_power:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3344,6 +3358,7 @@ watched component.
 [controller_fan my_controller_fan]
 #pin:
 #max_power:
+#min_power:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3391,6 +3406,7 @@ information.
 [temperature_fan my_temp_fan]
 #pin:
 #max_power:
+#min_power:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3450,6 +3466,7 @@ with the SET_FAN_SPEED [gcode command](G-Codes.md#fan_generic).
 [fan_generic extruder_partfan]
 #pin:
 #max_power:
+#min_power:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:

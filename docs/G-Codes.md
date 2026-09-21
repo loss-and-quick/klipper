@@ -537,9 +537,12 @@ then the speed is lowered step by step until the fan stalls to
 determine `off_below`. Finally the fan is stopped and restarted
 repeatedly with increasing kick durations to find the shortest kick
 after which the fan keeps spinning at that lowest speed, which gives
-`kick_start_time`. Use the SAVE_CONFIG command to save the results to
-the printer config file. The fan must have a `tachometer_pin`
-configured, and the calibration may take a minute or more to complete.
+`kick_start_time`. The speeds measured along the way are stored as
+`rpm_curve`, which the `linearize` option can use to turn a speed
+request into a fraction of the fan's speed range. Use the SAVE_CONFIG
+command to save the results to the printer config file. The fan must
+have a `tachometer_pin` configured, and the calibration may take a
+minute or more to complete.
 
 ### [filament_switch_sensor]
 

@@ -3245,6 +3245,22 @@ pin:
 #   requested speed before this scaling, so it still decides which
 #   requests turn the fan off entirely. The default is 0.0, which
 #   leaves the speed request unscaled.
+#linearize: False
+#   Interpret a speed request as a fraction of the fan's speed range
+#   rather than of its power range. A fan is not linear - on a typical
+#   part cooling fan half the power is closer to two thirds of the
+#   speed - so a request of 50% normally does not move half as much
+#   air. With this enabled the request is mapped through the measured
+#   rpm_curve, and 50% means half the rpm the fan reaches between
+#   min_power and max_power. Requires rpm_curve, which the
+#   FAN_CALIBRATE command measures and SAVE_CONFIG stores. The default
+#   is False.
+#rpm_curve:
+#   The measured relationship between duty cycle and fan speed, as one
+#   "duty_cycle, rpm" pair per line. This is written by the
+#   FAN_CALIBRATE command and is not normally edited by hand. Both
+#   columns must increase; a curve that dips means the tachometer is
+#   undercounting (see tachometer_poll_interval) and is rejected.
 #shutdown_speed: 0
 #   The desired fan speed (expressed as a value from 0.0 to 1.0) if
 #   the micro-controller software enters an error state. The default
@@ -3320,6 +3336,8 @@ a shutdown_speed equal to max_power.
 #pin:
 #max_power:
 #min_power:
+#linearize:
+#rpm_curve:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3359,6 +3377,8 @@ watched component.
 #pin:
 #max_power:
 #min_power:
+#linearize:
+#rpm_curve:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3407,6 +3427,8 @@ information.
 #pin:
 #max_power:
 #min_power:
+#linearize:
+#rpm_curve:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:
@@ -3467,6 +3489,8 @@ with the SET_FAN_SPEED [gcode command](G-Codes.md#fan_generic).
 #pin:
 #max_power:
 #min_power:
+#linearize:
+#rpm_curve:
 #shutdown_speed:
 #cycle_time:
 #hardware_pwm:

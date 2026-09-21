@@ -8,6 +8,8 @@ import logging
 
 # Added to the lowest speed that still keeps the fan spinning.
 OFF_BELOW_MARGIN = 0.02
+# Points kept in the saved rpm_curve
+MAX_CURVE_POINTS = 17
 # Fan speed used to check the tachometer for undercounting.
 UNDERCOUNT_CHECK_SPEED = 0.9
 # Recommended ratio between the tachometer edge rate and its poll rate.
@@ -41,6 +43,7 @@ class FanCalibrate:
         self.rpm_threshold = config.getfloat('calibrate_rpm_threshold', 0.05,
                                              above=0., maxval=1.)
         self.poll_time = 0.
+        self.curve = []
         gcode = self.printer.lookup_object('gcode')
         gcode.register_command('FAN_CALIBRATE', self.cmd_FAN_CALIBRATE,
                                desc=self.cmd_FAN_CALIBRATE_help)
@@ -72,7 +75,7 @@ class FanCalibrate:
         # measures - a previously saved off_below would clamp the low
         # speeds to zero and min_power would scale them away, so the
         # result could only ever confirm the previous one.
-        saved_params = fan.set_speed_params(0., 0., 0.)
+        saved_params = fan.set_speed_params(0., 0., 0., False)
         try:
             max_rpm, off_below, kick_start = self._run(gcmd, fan)
         finally:
@@ -92,6 +95,33 @@ class FanCalibrate:
         configfile = self.printer.lookup_object('configfile')
         configfile.set(fan_section, 'off_below', "%.3f" % (off_below,))
         configfile.set(fan_section, 'kick_start_time', "%.3f" % (kick_start,))
+        curve = self._format_curve(gcmd)
+        if curve is not None:
+            configfile.set(fan_section, 'rpm_curve', curve)
+    def _format_curve(self, gcmd):
+        # The curve is only usable if it rises in both duty cycle and rpm;
+        # a dip means the tachometer reading cannot be trusted.
+        pts = sorted(self.curve)
+        if len(pts) < 2:
+            return None
+        for (d0, r0), (d1, r1) in zip(pts, pts[1:]):
+            if r1 <= r0:
+                gcmd.respond_info(
+                    "FAN_CALIBRATE: not storing rpm_curve - the measured"
+                    " speed does not rise from %.3f (%.0f rpm) to %.3f"
+                    " (%.0f rpm)" % (d0, r0, d1, r1))
+                return None
+        return "".join("\n  %.4f, %.1f" % pt for pt in self._thin(pts))
+    def _thin(self, pts):
+        # The sweep collects a point per step, which is far more detail
+        # than the interpolation needs - keep a subset of them
+        if len(pts) <= MAX_CURVE_POINTS:
+            return pts
+        step = (len(pts) + MAX_CURVE_POINTS - 1) // MAX_CURVE_POINTS
+        thinned = pts[::step]
+        if thinned[-1] != pts[-1]:
+            thinned.append(pts[-1])
+        return thinned
     def _restore(self, fan, saved_params, initial_speed):
         # Never let a restore failure mask the original error
         try:
@@ -100,6 +130,7 @@ class FanCalibrate:
         except Exception:
             logging.exception("FAN_CALIBRATE: unable to restore fan state")
     def _run(self, gcmd, fan):
+        self.curve = []
         max_rpm = self._measure_max_rpm(fan)
         if max_rpm <= 0.:
             raise self.printer.command_error(
@@ -115,6 +146,7 @@ class FanCalibrate:
                 "FAN_CALIBRATE: fan did not start with the calibrated values"
                 " (off_below=%.3f kick_start_time=%.3f)"
                 % (off_below, kick_start))
+        self.curve.append((1., max_rpm))
         return max_rpm, off_below, kick_start
     def _pause(self, duration):
         if self.printer.is_shutdown():
@@ -185,6 +217,7 @@ class FanCalibrate:
                               % (value, rpm))
             if rpm < threshold:
                 return min(1., last_spinning + OFF_BELOW_MARGIN)
+            self.curve.append((value, rpm))
             last_spinning = value
         # The fan never stalled - no minimum speed needs to be enforced
         return 0.
@@ -193,7 +226,7 @@ class FanCalibrate:
         # matches what kick_start_time will do in normal operation.
         fan.set_speed(0.)
         self._pause(COAST_TIME)
-        fan.set_speed_params(0., kick_start_time, 0.)
+        fan.set_speed_params(0., kick_start_time, 0., False)
         fan.set_speed(duty)
         return self._wait_stable_rpm(fan) >= self.rpm_threshold * max_rpm
     def _find_kick_start(self, gcmd, fan, max_rpm, off_below):

@@ -17,6 +17,13 @@ class Fan:
                                                minval=0.)
         self.off_below = config.getfloat('off_below', default=0.,
                                          minval=0., maxval=1.)
+        self.rpm_curve = self._load_rpm_curve(config)
+        self.linearize = config.getboolean('linearize', False)
+        if self.linearize and not self.rpm_curve:
+            raise config.error(
+                "Option 'linearize' in section '%s' requires a calibrated"
+                " rpm_curve - run FAN_CALIBRATE first"
+                % (config.get_name(),))
         cycle_time = config.getfloat('cycle_time', 0.010, above=0.)
         hardware_pwm = config.getboolean('hardware_pwm', False)
         shutdown_speed = config.getfloat(
@@ -46,13 +53,55 @@ class Fan:
         self.printer.register_event_handler("gcode:request_restart",
                                             self._handle_request_restart)
 
+    def _load_rpm_curve(self, config):
+        # Calibrated duty cycle to rpm curve, one "duty, rpm" pair per line
+        self.rpm_curve_inv = ()
+        curve = config.getlists('rpm_curve', None, seps=(',', '\n'),
+                                parser=float, count=2)
+        if not curve:
+            return ()
+        pts = sorted(curve)
+        if len(pts) < 2:
+            raise config.error("Option 'rpm_curve' in section '%s' needs at"
+                               " least two points" % (config.get_name(),))
+        for (d0, r0), (d1, r1) in zip(pts, pts[1:]):
+            if d1 <= d0 or r1 <= r0:
+                raise config.error(
+                    "Option 'rpm_curve' in section '%s' must increase in both"
+                    " duty cycle and rpm (%.3f,%.0f then %.3f,%.0f). A curve"
+                    " that dips is a sign the tachometer is undercounting -"
+                    " reduce tachometer_poll_interval and calibrate again."
+                    % (config.get_name(), d0, r0, d1, r1))
+        self.rpm_curve_inv = tuple((r, d) for d, r in pts)
+        return tuple(pts)
+    def _lookup(self, value, table):
+        # Linear interpolation over a table of increasing (x, y) pairs
+        if value <= table[0][0]:
+            return table[0][1]
+        if value >= table[-1][0]:
+            return table[-1][1]
+        for i, (x, y) in enumerate(table[1:], 1):
+            if value <= x:
+                px, py = table[i - 1]
+                return py + (y - py) * (value - px) / (x - px)
+        return table[-1][1]
+    def _duty_to_rpm(self, duty):
+        return self._lookup(duty, self.rpm_curve)
+    def _rpm_to_duty(self, rpm):
+        return self._lookup(rpm, self.rpm_curve_inv)
     def get_mcu(self):
         return self.mcu_fan.get_mcu()
     def _apply_speed(self, print_time, value):
         req_value = value
         if value < self.off_below:
             req_value = value = 0.
-        if value:
+        if value and self.linearize:
+            # Scale the request onto the speed range the fan actually
+            # reaches, then convert that speed back to a duty cycle
+            lo = self._duty_to_rpm(self.min_power)
+            hi = self._duty_to_rpm(self.max_power)
+            value = self._rpm_to_duty(lo + value * (hi - lo))
+        elif value:
             # Scale the request onto the range the fan actually runs in
             value = self.min_power + value * (self.max_power - self.min_power)
         value = max(0., min(self.max_power, value))
@@ -77,13 +126,16 @@ class Fan:
         self.gcrq.send_async_request(value, print_time)
     def set_speed_from_command(self, value):
         self.gcrq.queue_gcode_request(value)
-    def set_speed_params(self, off_below, kick_start_time, min_power):
+    def set_speed_params(self, off_below, kick_start_time, min_power,
+                         linearize):
         # Allow calibration tools to temporarily neutralize the settings
         # that shape a speed request; returns the previous settings
-        prev = (self.off_below, self.kick_start_time, self.min_power)
+        prev = (self.off_below, self.kick_start_time, self.min_power,
+                self.linearize)
         self.off_below = off_below
         self.kick_start_time = kick_start_time
         self.min_power = min_power
+        self.linearize = linearize
         return prev
     def _handle_request_restart(self, print_time):
         self.set_speed(0., print_time)

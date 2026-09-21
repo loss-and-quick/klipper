@@ -3277,6 +3277,17 @@ pin:
 #   enough for fans below 10000 RPM at 2 PPR. This must be smaller than
 #   30/(tachometer_ppr*rpm), with some margin, where rpm is the
 #   maximum speed (in RPM) of the fan.
+#   The counter registers at most one edge per polling period, so a
+#   value that is too large does not report an error - it silently
+#   reports a speed lower than the actual one. A margin of at least
+#   five is recommended.
+#tachometer_sample_time: 1.0
+#   When tachometer_pin is specified, this is the period (in seconds)
+#   over which the tachometer pulses are averaged. The reported speed
+#   is refreshed once per sample time and is an average over the
+#   preceding sample time, so it lags the actual fan speed. Lowering
+#   this reduces that lag at the cost of resolution at low speeds. The
+#   default is 1.0.
 #enable_pin:
 #   Optional pin to enable power to the fan. This can be useful for fans
 #   with dedicated PWM inputs. Some of these fans stay on even at 0% PWM
@@ -3304,6 +3315,7 @@ a shutdown_speed equal to max_power.
 #tachometer_pin:
 #tachometer_ppr:
 #tachometer_poll_interval:
+#tachometer_sample_time:
 #enable_pin:
 #   See the "fan" section for a description of the above parameters.
 #heater: extruder
@@ -3341,6 +3353,7 @@ watched component.
 #tachometer_pin:
 #tachometer_ppr:
 #tachometer_poll_interval:
+#tachometer_sample_time:
 #enable_pin:
 #   See the "fan" section for a description of the above parameters.
 #fan_speed: 1.0
@@ -3387,6 +3400,7 @@ information.
 #tachometer_pin:
 #tachometer_ppr:
 #tachometer_poll_interval:
+#tachometer_sample_time:
 #enable_pin:
 #   See the "fan" section for a description of the above parameters.
 #sensor_type:
@@ -3445,6 +3459,7 @@ with the SET_FAN_SPEED [gcode command](G-Codes.md#fan_generic).
 #tachometer_pin:
 #tachometer_ppr:
 #tachometer_poll_interval:
+#tachometer_sample_time:
 #enable_pin:
 #   See the "fan" section for a description of the above parameters.
 ```

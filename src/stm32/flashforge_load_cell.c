@@ -21,7 +21,12 @@
 #define CMD_QUEUE_SIZE 6
 
 static const char CMD_H1[] = "H1 \0\0\0\0\0\0\0";
+static const char CMD_H5[] = "H5 \0\0\0\0\0\0\0";
+static const char CMD_H6[] = "H6 \0\0\0\0\0\0\0";
 static const char CMD_H7[] = "H7 \0\0\0\0\0\0\0";
+static const char CMD_H8[] = "H8 \0\0\0\0\0\0\0";
+static const char CMD_H9[] = "H9 \0\0\0\0\0\0\0";
+static const char CMD_H10[] = "H10 \0\0\0\0\0\0";
 
 struct queued_cmd {
   char cmd_name[16];
@@ -152,6 +157,23 @@ static int32_t parse_weight_from_response(const char *line) {
     return (int32_t)strtol(p, NULL, 10);
 }
 
+// The numeric replies are all shaped "command <NAME> ok. <value>". H7 appends
+// the weight and a " g" unit after the value, so it keeps its own parser.
+static int32_t parse_int_after_ok(const char *line) {
+  const char *p = strstr(line, "ok.");
+
+  if (!p) {
+    return 0;
+  }
+
+  p += 3;
+  while (*p == ' ') {
+    p++;
+  }
+
+  return (int32_t)strtol(p, NULL, 10);
+}
+
 static void process_received_line(void) {
   irq_disable();
   uint16_t head = bridge.rx_head;
@@ -183,14 +205,20 @@ static void process_received_line(void) {
   const char *status = "error";
   if (strstr(line, "ok.")) {
     status = "ok";
+  } else if (len && strcmp(bridge.last_cmd_name, "H9") == 0) {
+    // H9 answers with a bare version string and carries no "ok." marker
+    status = "ok";
   }
 
-  int32_t weight_value = 0;
-  if (strcmp(bridge.last_cmd_name, "H7") == 0 && strcmp(status, "ok") == 0) {
-    weight_value = parse_weight_from_response(line);
+  int32_t value = 0;
+  if (strcmp(status, "ok") == 0) {
+    if (strcmp(bridge.last_cmd_name, "H7") == 0) {
+      value = parse_weight_from_response(line);
+    } else if (strcmp(bridge.last_cmd_name, "H9") != 0) {
+      value = parse_int_after_ok(line);
+    }
   }
-  flashforge_loadcell_response_send(status, bridge.last_cmd_name, weight_value,
-                                    line);
+  flashforge_loadcell_response_send(status, bridge.last_cmd_name, value, line);
 
   bridge.state = FLASHFORGE_IDLE;
   try_send_next_queued_command();
@@ -339,6 +367,36 @@ void command_flashforge_loadcell_h7(uint32_t *args) {
   send_flashforge_command("H7", CMD_H7, sizeof(CMD_H7) - 1);
 }
 DECL_COMMAND(command_flashforge_loadcell_h7, "flashforge_loadcell_h7");
+
+// Command H5: Read the stored tare offset in raw ADC counts
+void command_flashforge_loadcell_h5(uint32_t *args) {
+  send_flashforge_command("H5", CMD_H5, sizeof(CMD_H5) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h5, "flashforge_loadcell_h5");
+
+// Command H6: Read the calibration factor
+void command_flashforge_loadcell_h6(uint32_t *args) {
+  send_flashforge_command("H6", CMD_H6, sizeof(CMD_H6) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h6, "flashforge_loadcell_h6");
+
+// Command H8: Read the module status flag
+void command_flashforge_loadcell_h8(uint32_t *args) {
+  send_flashforge_command("H8", CMD_H8, sizeof(CMD_H8) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h8, "flashforge_loadcell_h8");
+
+// Command H9: Read the module firmware version
+void command_flashforge_loadcell_h9(uint32_t *args) {
+  send_flashforge_command("H9", CMD_H9, sizeof(CMD_H9) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h9, "flashforge_loadcell_h9");
+
+// Command H10: Read the weight threshold that drives the Z-Probe pin
+void command_flashforge_loadcell_h10(uint32_t *args) {
+  send_flashforge_command("H10", CMD_H10, sizeof(CMD_H10) - 1);
+}
+DECL_COMMAND(command_flashforge_loadcell_h10, "flashforge_loadcell_h10");
 
 void command_flashforge_loadcell_test_cmd(uint32_t *args) {
   uint32_t length = args[0];

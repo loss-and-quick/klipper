@@ -210,13 +210,14 @@ void flashforge_loadcell_task(void) {
     }
   }
 
-  if (!sched_check_wake(&loadcell_wake))
-    return;
-
-  if (bridge.line_ready) {
+  if (sched_check_wake(&loadcell_wake) && bridge.line_ready) {
     process_received_line();
   }
 
+  // The timeout must be evaluated even without a wake-up. The only wake source
+  // is the RX interrupt, so a command the load cell never answers would
+  // otherwise leave the bridge in FLASHFORGE_CMD_SENT forever and wedge the
+  // queue until the MCU is restarted.
   if (bridge.state == FLASHFORGE_CMD_SENT &&
       timer_is_before(bridge.cmd_sent_time + FLASHFORGE_CMD_TIMEOUT,
                       timer_read_time())) {

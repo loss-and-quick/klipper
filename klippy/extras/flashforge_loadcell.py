@@ -62,7 +62,7 @@ class MCUResponse:
         if value is None: return default
         if isinstance(value, str): return value
         try: return value.decode('utf-8')
-        except: return default
+        except (AttributeError, UnicodeDecodeError): return default
 
 
 class FlashforgeLoadCell:

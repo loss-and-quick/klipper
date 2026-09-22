@@ -230,6 +230,12 @@ DECL_TASK(flashforge_loadcell_task);
 
 static void enqueue_flashforge_command(const char *cmd_name,
                                        const char *cmd_data, size_t cmd_len) {
+  if (cmd_len > sizeof(cmd_queue[0].cmd_data)) {
+    flashforge_loadcell_response_send("error", cmd_name, 0,
+                                      "command too long");
+    return;
+  }
+
   irq_disable();
   uint8_t next = (cmdq_head + 1) % CMD_QUEUE_SIZE;
   if (next == cmdq_tail) {

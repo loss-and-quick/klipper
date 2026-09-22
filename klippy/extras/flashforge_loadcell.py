@@ -1,4 +1,6 @@
 import logging
+import re
+
 import mcu
 
 from enum import Enum
@@ -8,22 +10,40 @@ MCU_FLASHFORGE_RESPONSE = "flashforge_loadcell_response"
 MCU_CMD_FLASHFORGE_H1 = "flashforge_loadcell_h1"
 MCU_CMD_FLASHFORGE_H2 = "flashforge_loadcell_h2 weight=%u"
 MCU_CMD_FLASHFORGE_H3 = "flashforge_loadcell_h3 weight=%u"
+MCU_CMD_FLASHFORGE_H5 = "flashforge_loadcell_h5"
+MCU_CMD_FLASHFORGE_H6 = "flashforge_loadcell_h6"
 MCU_CMD_FLASHFORGE_H7 = "flashforge_loadcell_h7"
+MCU_CMD_FLASHFORGE_H8 = "flashforge_loadcell_h8"
+MCU_CMD_FLASHFORGE_H9 = "flashforge_loadcell_h9"
+MCU_CMD_FLASHFORGE_H10 = "flashforge_loadcell_h10"
 MCU_CMD_FLASHFORGE_TEST = "flashforge_loadcell_test_cmd cmd=%*s"
+
+# "command H7 ok. <raw ADC counts> <weight> g"
+H7_RAW_RE = re.compile(r'ok\.\s+(\d+)\s+-?\d+\s*g')
 
 
 class Commands(Enum):
     H1 = 'H1'
     H2 = 'H2'
     H3 = 'H3'
+    H5 = 'H5'
+    H6 = 'H6'
     H7 = 'H7'
+    H8 = 'H8'
+    H9 = 'H9'
+    H10 = 'H10'
     TEST = 'TEST'
 
 _MCU_CMD_MAP = {
     MCU_CMD_FLASHFORGE_H1: Commands.H1,
     MCU_CMD_FLASHFORGE_H2: Commands.H2,
     MCU_CMD_FLASHFORGE_H3: Commands.H3,
+    MCU_CMD_FLASHFORGE_H5: Commands.H5,
+    MCU_CMD_FLASHFORGE_H6: Commands.H6,
     MCU_CMD_FLASHFORGE_H7: Commands.H7,
+    MCU_CMD_FLASHFORGE_H8: Commands.H8,
+    MCU_CMD_FLASHFORGE_H9: Commands.H9,
+    MCU_CMD_FLASHFORGE_H10: Commands.H10,
     MCU_CMD_FLASHFORGE_TEST: Commands.TEST,
 }
 
@@ -56,6 +76,12 @@ class FlashforgeLoadCell:
         self.active_command = None
         self.logger = logging.getLogger('klippy')
         self.last_weight_grams = 0
+        self.last_raw_counts = 0
+        self.zero_counts = 0
+        self.calibration = 0
+        self.threshold_grams = 0
+        self.status_flag = 0
+        self.module_version = ''
         self.tare_threshold = config.getint('tare_threshold', 50, 0)
         self.tare_timeout = config.getfloat('tare_timeout', 10.0, 0.)
         self.supported_cmds = {}
@@ -80,6 +106,11 @@ class FlashforgeLoadCell:
             desc="Queries and displays the current weight"
         )
         self.gcode.register_command(
+            "FLASHFORGE_LOAD_CELL_INFO",
+            self.cmd_LOAD_CELL_INFO,
+            desc="Queries the module version, calibration, trigger threshold and zero"
+        )
+        self.gcode.register_command(
             "FLASHFORGE_LOAD_CELL_TEST",
             self.cmd_LOAD_CELL_TEST,
             desc="Sends an arbitrary command to the loadcell"
@@ -91,7 +122,12 @@ class FlashforgeLoadCell:
             MCU_CMD_FLASHFORGE_H1,
             MCU_CMD_FLASHFORGE_H2,
             MCU_CMD_FLASHFORGE_H3,
+            MCU_CMD_FLASHFORGE_H5,
+            MCU_CMD_FLASHFORGE_H6,
             MCU_CMD_FLASHFORGE_H7,
+            MCU_CMD_FLASHFORGE_H8,
+            MCU_CMD_FLASHFORGE_H9,
+            MCU_CMD_FLASHFORGE_H10,
             MCU_CMD_FLASHFORGE_TEST
         ):
             cmd = self.mcu.try_lookup_command(cmd_name)
@@ -105,6 +141,9 @@ class FlashforgeLoadCell:
         response = MCUResponse(params)
         self.logger.debug(f"{self.name}: Received response: {response.command_name}, status: {response.status}")
 
+        if response.status == 'ok':
+            self._record_response(response)
+
         if self.active_command:
             expected_cmd = self.active_command.get('cmd')
             if response.command_name == expected_cmd.value:
@@ -113,8 +152,23 @@ class FlashforgeLoadCell:
                     completion.complete(response)
                 return
 
-        if response.command_name == Commands.H7.value and response.status == 'ok':
+    def _record_response(self, response):
+        name = response.command_name
+        if name == Commands.H7.value:
             self.last_weight_grams = response.value
+            match = H7_RAW_RE.search(response.raw_response)
+            if match:
+                self.last_raw_counts = int(match.group(1))
+        elif name in (Commands.H1.value, Commands.H5.value):
+            self.zero_counts = response.value
+        elif name == Commands.H6.value:
+            self.calibration = response.value
+        elif name == Commands.H8.value:
+            self.status_flag = response.value
+        elif name == Commands.H10.value:
+            self.threshold_grams = response.value
+        elif name == Commands.H9.value:
+            self.module_version = response.raw_response.strip()
 
     def _send_and_wait(self, command_name, params_list=None):
         if self.active_command:
@@ -185,6 +239,24 @@ class FlashforgeLoadCell:
         self._send_and_wait(MCU_CMD_FLASHFORGE_H3, params_list=[weight])
         gcmd.respond_info(f"{self.name}: Save calibration command sent.")
 
+    def cmd_LOAD_CELL_INFO(self, gcmd):
+        for cmd_name in (
+            MCU_CMD_FLASHFORGE_H9,
+            MCU_CMD_FLASHFORGE_H6,
+            MCU_CMD_FLASHFORGE_H10,
+            MCU_CMD_FLASHFORGE_H8,
+            MCU_CMD_FLASHFORGE_H5,
+            MCU_CMD_FLASHFORGE_H7
+        ):
+            self._send_and_wait(cmd_name)
+        gcmd.respond_info(
+            f"{self.name}: module version: {self.module_version}\n"
+            f"Calibration factor: {self.calibration}\n"
+            f"Probe trigger threshold: {self.threshold_grams} grams\n"
+            f"Status flag: {self.status_flag}\n"
+            f"Zero: {self.zero_counts} counts\n"
+            f"Current: {self.last_weight_grams} grams at {self.last_raw_counts} counts")
+
     def cmd_LOAD_CELL_TEST(self, gcmd):
         cmd_str = gcmd.get('CMD', None)
         if cmd_str is None:
@@ -195,7 +267,15 @@ class FlashforgeLoadCell:
         gcmd.respond_info(f"{self.name}: Response: {response.raw_response}")
 
     def get_status(self, eventtime):
-        return {'force_g': self.last_weight_grams}
+        return {
+            'force_g': self.last_weight_grams,
+            'raw_counts': self.last_raw_counts,
+            'zero_counts': self.zero_counts,
+            'calibration': self.calibration,
+            'threshold_g': self.threshold_grams,
+            'status_flag': self.status_flag,
+            'module_version': self.module_version,
+        }
 
 class LoadCellSensor:
     def __init__(self, config, loadcell):

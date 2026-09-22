@@ -51,7 +51,7 @@ struct flashforge_bridge_state {
   uint32_t cmd_sent_time;
 
   volatile uint8_t line_ready;
-  volatile uint8_t rx_overflow;
+  volatile uint8_t rx_discard;
 };
 
 static struct flashforge_bridge_state bridge;
@@ -100,17 +100,16 @@ static void try_send_next_queued_command(void) {
 void LOADCELL_UARTx_IRQHandler(void) {
   uint32_t sr = UARTx->SR;
 
-  if (sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) {
-    if (sr & USART_SR_ORE) {
-      (void)UARTx->DR;
-    }
-    UARTx->SR &= ~(USART_SR_NE | USART_SR_FE | USART_SR_PE);
-  }
-
-  if (sr & USART_SR_RXNE) {
+  if (sr & (USART_SR_RXNE | USART_SR_ORE)) {
+    // The RXNE and the error flags are automatically cleared by reading SR,
+    // followed by reading DR.
     char d = UARTx->DR;
     uint16_t next = (bridge.rx_head + 1) % RXBUF_SIZE;
-    if (next != bridge.rx_tail) {
+    if (sr & (USART_SR_ORE | USART_SR_NE | USART_SR_FE | USART_SR_PE)) {
+      // The byte is unusable, so the response being assembled is lost
+      bridge.rx_discard = 1;
+      sched_wake_task(&loadcell_wake);
+    } else if (next != bridge.rx_tail) {
       bridge.rxbuf[bridge.rx_head] = d;
       bridge.rx_head = next;
       if (d == '\n') {
@@ -118,7 +117,7 @@ void LOADCELL_UARTx_IRQHandler(void) {
         sched_wake_task(&loadcell_wake);
       }
     } else {
-      bridge.rx_overflow = 1;
+      bridge.rx_discard = 1;
       sched_wake_task(&loadcell_wake);
     }
   }
@@ -225,14 +224,14 @@ static void process_received_line(void) {
 }
 
 void flashforge_loadcell_task(void) {
-  if (bridge.rx_overflow) {
-    bridge.rx_overflow = 0;
+  if (bridge.rx_discard) {
+    bridge.rx_discard = 0;
     irq_disable();
     bridge.rx_head = bridge.rx_tail;
     irq_enable();
     if (bridge.state == FLASHFORGE_CMD_SENT) {
       flashforge_loadcell_response_send("error", bridge.last_cmd_name, 0,
-                                        "RX buffer overflow");
+                                        "RX buffer overflow or UART error");
       bridge.state = FLASHFORGE_IDLE;
       try_send_next_queued_command();
     }
